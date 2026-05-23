@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>AnonChat - Anonymous College Chat</title>
     <meta name="theme-color" content="#0a0b14" />
     <meta name="application-name" content="AnonChat" />
@@ -35,10 +35,10 @@
         }
       })();
     </script>
-   <link rel="stylesheet" href="/css/styles.css?v=mobile-scroll-final-4" />   
+    <link rel="stylesheet" href="/css/styles.css?v=stable-v3" />
     <link rel="stylesheet" href="/css/landing-nav-fix.css?v=stable-v3" />
     <link rel="stylesheet" href="/css/auth-page-fix.css?v=stable-v3" />
-    <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=mobile-scroll-final-3" />
+    <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=stable-v3" />
     <script src="/socket.io/socket.io.js" defer></script>
 <script src="/js/app.js?v=auth-fix-20260522-2" defer></script>
   </head>
@@ -59,9 +59,9 @@
           </a>
           <nav class="landing-links" aria-label="Landing navigation">
             <a href="/">Home</a>
-            <a href="#features">Features</a>
-            <a href="#safety">Safety</a>
-            <a href="#about">About</a>
+            <a href="#features" onclick="document.getElementById('features')?.scrollIntoView({behavior:'smooth'});return false;">Features</a>
+            <a href="#safety" onclick="document.getElementById('safety')?.scrollIntoView({behavior:'smooth'});return false;">Safety</a>
+            <a href="#about" onclick="document.getElementById('about')?.scrollIntoView({behavior:'smooth'});return false;">About</a>
           </nav>
           <div style="display:flex;align-items:center;gap:12px;">
             <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle theme">
@@ -161,8 +161,8 @@
           <div>
             <strong>Quick Links</strong>
             <a href="#" onclick="window.scrollTo(0,0); return false;">Home</a>
-            <a href="#features">Features</a>
-            <a href="#safety">Safety</a>
+            <a href="#features" onclick="document.getElementById('features')?.scrollIntoView({behavior:'smooth'});return false;">Features</a>
+            <a href="#safety" onclick="document.getElementById('safety')?.scrollIntoView({behavior:'smooth'});return false;">Safety</a>
             <a href="#about">About Us</a>
           </div>
           <div>
