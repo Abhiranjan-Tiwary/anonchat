@@ -3248,3 +3248,51 @@ body.auth-route-scroll {
     z-index: 20 !important;
   }
 }
+/* ULTRA FINAL MOBILE AUTH SCROLL FIX */
+@media (max-width: 768px) {
+  html,
+  body {
+    height: auto !important;
+    min-height: 100dvh !important;
+    overflow-x: hidden !important;
+    overflow-y: scroll !important;
+    position: static !important;
+  }
+
+  .app-root,
+  #authView,
+  .auth-view,
+  .auth-shell,
+  .auth-panel,
+  .auth-card,
+  .auth-form {
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    overflow-y: visible !important;
+    position: relative !important;
+    transform: none !important;
+  }
+
+  .auth-view {
+    display: block !important;
+    padding: 24px 14px 140px !important;
+  }
+
+  .auth-panel {
+    margin: 0 auto 80px !important;
+  }
+
+  .auth-form {
+    padding-bottom: 120px !important;
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    scroll-margin-top: 100px !important;
+    scroll-margin-bottom: 180px !important;
+  }
+}
