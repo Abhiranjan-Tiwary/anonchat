@@ -1,3 +1,71 @@
+/* ===== MOBILE SCROLL FIX ===== */
+html {
+  overflow-x: hidden;
+  overflow-y: auto;
+  height: 100%;
+}
+
+body {
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-height: 100%;
+  -webkit-overflow-scrolling: touch;
+  touch-action: auto;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+  box-sizing: border-box;
+}
+
+/* Main app container */
+#app,
+.app-root,
+.app-container,
+[class*="app"] {
+  overflow-x: hidden;
+}
+
+/* Chat feed scroll */
+#chatFeed,
+.chat-feed,
+.messages-container {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* Sidebar scroll */
+#sidebar,
+.sidebar,
+.room-list {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Settings, admin pages scroll */
+.settings-page,
+.admin-content,
+.admin-main {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Remove any touch blocking */
+@media (max-width: 768px) {
+  html, body {
+    overflow-y: auto !important;
+    position: relative !important;
+    height: auto !important;
+    min-height: 100vh;
+  }
+  
+  .chat-feed,
+  #chatFeed {
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+}
 @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap");
 
 :root {
