@@ -1,0 +1,1053 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>AnonChat - Anonymous College Chat</title>
+    <meta name="theme-color" content="#0a0b14" />
+    <meta name="application-name" content="AnonChat" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta
+      name="description"
+      content="Anonymous real-time style college chat app with campus rooms, reporting, and moderation."
+    />
+    <link rel="icon" href="/assets/logo/logo.png" />
+    <link rel="apple-touch-icon" href="/assets/logo/logo.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <script>
+      (function () {
+        try {
+          var choice = localStorage.getItem("anonchat-theme-v1") || "dark";
+          if (choice !== "dark" && choice !== "light" && choice !== "system") choice = "dark";
+          var prefersLight = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+          var resolved = choice === "system" ? (prefersLight ? "light" : "dark") : choice;
+          document.documentElement.dataset.themeChoice = choice;
+          document.documentElement.dataset.theme = resolved;
+          document.documentElement.classList.add("theme-" + resolved, "theme-choice-" + choice);
+          document.documentElement.style.colorScheme = resolved;
+        } catch (error) {
+          document.documentElement.dataset.themeChoice = "dark";
+          document.documentElement.dataset.theme = "dark";
+          document.documentElement.classList.add("theme-dark", "theme-choice-dark");
+          document.documentElement.style.colorScheme = "dark";
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="/css/styles.css?v=stable-v3" />
+    <link rel="stylesheet" href="/css/landing-nav-fix.css?v=stable-v3" />
+    <link rel="stylesheet" href="/css/auth-page-fix.css?v=stable-v3" />
+    <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=stable-v3" />
+    <script src="/socket.io/socket.io.js" defer></script>
+<script src="/js/app.js?v=auth-fix-20260522-2" defer></script>
+  </head>
+  <body>
+    <div id="sidebarOverlay"></div>
+    <div
+      class="offline-banner"
+      id="offlineBanner"
+      style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#ef4444;color:#fff;text-align:center;padding:8px;font-size:13px;font-weight:600;">
+      ⚠️ No internet connection
+    </div>
+    <div class="app-root">
+      <section class="auth-view" id="authView">
+        <header class="landing-nav">
+          <a class="landing-brand" href="/" aria-label="AnonChat home">
+            <span class="brand-mark small"><img src="/assets/logo/logo.png" alt="" /></span>
+            <strong>AnonChat</strong>
+          </a>
+          <nav class="landing-links" aria-label="Landing navigation">
+            <a href="/">Home</a>
+            <a href="#features">Features</a>
+            <a href="#safety">Safety</a>
+            <a href="#about">About</a>
+          </nav>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle theme">
+              <span class="theme-toggle-track" aria-hidden="true"><span class="theme-toggle-thumb">&#127769;</span></span>
+              <strong class="theme-toggle-label">Dark</strong>
+            </button>
+            <button class="ghost-btn nav-cta" type="button" data-auth-mode="login">Login</button>
+            <button class="primary-btn nav-cta" type="button" data-auth-mode="register">Get Started</button>
+          </div>
+        </header>
+
+        <div class="auth-visual">
+          <div class="hero-copy">
+            <span class="hero-pill">100% Anonymous Campus Chat</span>
+            <h1>
+              <span style="display:block;background:none;color:#fff;-webkit-text-fill-color:#fff;">Talk freely.</span>
+              <span style="display:block;background:linear-gradient(90deg,#a78bfa,#818cf8);-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;">Stay anonymous.</span>
+              <span style="display:block;background:linear-gradient(90deg,#818cf8,#60a5fa);-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;">Connect safely.</span>
+            </h1>
+            <p>
+              A secure anonymous chat platform where you can connect, share your thoughts,
+              and chat without revealing your identity.
+            </p>
+            <div class="hero-actions">
+              <button class="primary-btn" type="button" data-auth-mode="register">Start Anonymous Chat</button>
+              <button class="ghost-btn" type="button" data-auth-mode="login">Login / Signup</button>
+            </div>
+            <button class="link-btn strong-link" id="guestModeButton" type="button">Continue as Guest &rarr;</button>
+            <div
+              aria-label="AnonChat highlights"
+              style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;margin-top:28px;padding-top:28px;border-top:1px solid rgba(255,255,255,0.08);max-width:700px;">
+              <span style="display:grid;gap:8px;padding-right:24px;">
+                <strong style="color:#fff;font-size:28px;line-height:1;font-weight:800;">24K+</strong>
+                <small style="color:rgba(232,234,240,0.45);font-size:14px;">Active Users</small>
+              </span>
+              <span style="display:grid;gap:8px;padding-inline:24px;border-left:1px solid rgba(255,255,255,0.08);border-right:1px solid rgba(255,255,255,0.08);">
+                <strong style="color:#fff;font-size:28px;line-height:1;font-weight:800;">100%</strong>
+                <small style="color:rgba(232,234,240,0.45);font-size:14px;">Anonymous</small>
+              </span>
+              <span style="display:grid;gap:8px;padding-left:24px;">
+                <strong style="color:#fff;font-size:28px;line-height:1;font-weight:800;">99.9%</strong>
+                <small style="color:rgba(232,234,240,0.45);font-size:14px;">Uptime</small>
+              </span>
+            </div>
+          </div>
+          <div class="product-preview" aria-label="AnonChat interface preview">
+            <div class="preview-head">
+              <span class="preview-avatar">AU</span>
+              <div>
+                <strong>Anonymous User</strong>
+                <small><span class="signal-dot"></span>Online</small>
+              </div>
+              <span class="preview-menu">::</span>
+            </div>
+            <div class="preview-bubble">Hey, anyone here?<small>10:30 PM</small></div>
+            <div class="preview-bubble mine">Yes, let's talk safely!<small>10:31 PM</small></div>
+            <div class="preview-bubble">Nice to meet you!<small>10:31 PM</small></div>
+            <div class="preview-input">
+              <span>Type a message...</span>
+              <button class="send-mini" type="button" aria-label="Preview send">></button>
+            </div>
+          </div>
+          <div class="hero-feature-grid" id="features" aria-label="AnonChat highlights">
+            <div><strong>Anonymous Identity</strong><span>No real name required in public rooms.</span></div>
+            <div><strong>Real-Time Chat</strong><span>Instant messaging with real-time typing and smooth updates.</span></div>
+            <div id="safety"><strong>Safe Community</strong><span>Report, block, and moderation tools to keep you safe.</span></div>
+            <div><strong>Private Rooms</strong><span>Join public chats or create private rooms with friends.</span></div>
+            <div><strong>Admin Moderation</strong><span>Admins monitor activity to ensure a safe environment.</span></div>
+          </div>
+          <div class="campus-signal">
+            <span class="signal-dot"></span>
+            <span id="authOnlineCount">Connecting...</span>
+          </div>
+        </div>
+
+        <section class="how-it-works" aria-label="How AnonChat works">
+          <h2>How It Works</h2>
+          <div class="how-rail">
+            <div><span>1</span><strong>Create Account / Continue Anonymously</strong></div>
+            <div><span>2</span><strong>Choose Public Chat or Private Room</strong></div>
+            <div><span>3</span><strong>Start Chatting Safely</strong></div>
+            <div><span>4</span><strong>Report Harmful Users If Needed</strong></div>
+          </div>
+        </section>
+
+        <footer class="landing-footer" id="about">
+          <div>
+            <a class="landing-brand footer-brand" href="/" aria-label="AnonChat home">
+              <span class="brand-mark small"><img src="/assets/logo/logo.png" alt="" /></span>
+              <strong>AnonChat</strong>
+            </a>
+            <p>A safe space for anonymous conversations. Your privacy, our priority.</p>
+            <div class="footer-socials" aria-label="Social links">
+              <span>T</span><span>D</span><span>S</span>
+            </div>
+          </div>
+          <div>
+            <strong>Quick Links</strong>
+            <a href="#" onclick="window.scrollTo(0,0); return false;">Home</a>
+            <a href="#features">Features</a>
+            <a href="#safety">Safety</a>
+            <a href="#about">About Us</a>
+          </div>
+          <div>
+            <strong>Support</strong>
+            <a href="mailto:supportanonchat@gmail.com?subject=Help%20Center%20-%20AnonChat">Help Center</a>
+            <a href="mailto:supportanonchat@gmail.com?subject=Contact%20Us%20-%20AnonChat">Contact Us</a>
+            <a href="mailto:supportanonchat@gmail.com?subject=Bug%20Report%20-%20AnonChat&body=Describe%20the%20bug%20here...">Report a Bug</a>
+            <a href="mailto:supportanonchat@gmail.com?subject=Community%20Guidelines%20-%20AnonChat">Community Guidelines</a>
+          </div>
+          <div>
+            <strong>Contact</strong>
+            <div class="footer-contact-box">
+              <p class="footer-email-label">Send us a message:</p>
+              <a class="footer-email-link" href="mailto:supportanonchat@gmail.com">📧 supportanonchat@gmail.com</a>
+              <p class="footer-help-text">We're here to help 24/7</p>
+              <a
+                class="footer-support-btn"
+                href="mailto:supportanonchat@gmail.com?subject=AnonChat%20Support%20Request&body=Hi%20AnonChat%20Team,%0A%0AI%20need%20help%20with:%0A%0A">
+                Get Support →
+              </a>
+            </div>
+          </div>
+          <small>&copy; 2026 AnonChat. All rights reserved.</small>
+        </footer>
+
+        <aside class="auth-brand-panel" aria-label="AnonChat sign in benefits">
+          <a class="landing-brand auth-brand-logo" href="/" aria-label="AnonChat home">
+            <span class="brand-mark small"><img src="/assets/logo/logo.png" alt="" /></span>
+            <strong>AnonChat</strong>
+          </a>
+          <span class="auth-online-pill"><span class="signal-dot"></span>2,482 users online right now</span>
+          <h1>
+            <span>Your identity,</span>
+            <span>your rules.</span>
+          </h1>
+          <p>
+            Join thousands of students chatting freely and safely. No real name.
+            No judgment. Just real conversations.
+          </p>
+          <div class="auth-feature-list" aria-label="Auth features">
+            <div>
+              <span>🔒</span>
+              <div>
+                <strong>100% Anonymous</strong>
+                <small>Your real identity is never exposed to other users</small>
+              </div>
+              </div>
+            <div>
+              <span>⚡</span>
+              <div>
+                <strong>Real-time Messaging</strong>
+                <small>Instant chat with typing indicators</small>
+              </div>
+            </div>
+            <div>
+              <span>🛡️</span>
+              <div>
+                <strong>Admin Protected</strong>
+                <small>24/7 moderation keeps every room safe</small>
+              </div>
+            </div>
+          </div>
+          <div class="auth-testimonial">
+            <p>"AnonChat gave me a safe space to share my thoughts without fear. The anonymity feature is brilliant."</p>
+            <div>
+              <span>AU</span>
+              <div>
+                <strong>Anonymous User #7821</strong>
+                <small>CSE Student · Quantum University</small>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <div class="auth-panel">
+          <button class="icon-btn auth-close" id="closeAuthPanel" type="button" aria-label="Close login panel">x</button>
+          <div class="brand-lockup">
+            <div class="brand-mark"><img src="/assets/logo/logo.png" alt="AnonChat logo" /></div>
+            <div>
+              <p class="eyebrow">College network</p>
+              <h1>AnonChat</h1>
+            </div>
+          </div>
+
+          <p class="auth-copy">Create a real account, keep your public chat identity anonymous, and talk inside campus rooms.</p>
+
+          <div class="auth-tab-switcher" aria-label="Authentication mode">
+            <button type="button" data-auth-mode="login">Login</button>
+            <button type="button" data-auth-mode="register">Register</button>
+            <button type="button" data-auth-mode="admin">Admin</button>
+          </div>
+
+          <h2 class="auth-title" id="authTitle">Welcome back</h2>
+          <p class="auth-subtitle" id="authSubtitle">Sign in to continue your anonymous journey</p>
+
+          <div class="social-row" id="socialRow">
+            <button class="social-btn" type="button" data-social-provider="google" aria-label="Continue with Google">
+              <span class="social-icon google-icon">G</span>
+              <span>Google</span>
+            </button>
+            <button class="social-btn facebook" type="button" data-social-provider="facebook" aria-label="Continue with Facebook">
+              <span class="social-icon facebook-icon">f</span>
+              <span>Facebook</span>
+            </button>
+          </div>
+
+          <div class="auth-divider" id="authDivider">
+            <span></span>
+            <em>or continue with email</em>
+            <span></span>
+          </div>
+
+          <div class="auth-inline-error hidden" id="authInlineError" role="alert" aria-live="polite"></div>
+
+          <form class="auth-form" id="authForm" novalidate>
+            <div class="login-only">
+              <label for="loginIdentifierInput">Username or email</label>
+              <input
+                id="loginIdentifierInput"
+                type="text"
+                autocomplete="username"
+                placeholder="your_username"
+                required
+              />
+            </div>
+
+            <div class="admin-only hidden">
+              <label for="adminUsernameInput">Admin username</label>
+              <input
+                id="adminUsernameInput"
+                type="text"
+                autocomplete="username"
+                placeholder="siteadmin"
+              />
+            </div>
+
+            <div class="register-only hidden">
+              <label for="fullNameInput">Full name</label>
+              <input
+                id="fullNameInput"
+                type="text"
+                autocomplete="name"
+                placeholder="Abhishek Kumar"
+                maxlength="60"
+              />
+            </div>
+
+            <div class="register-only hidden">
+              <label for="contactInput">Contact number</label>
+              <input
+                id="contactInput"
+                type="tel"
+                autocomplete="tel"
+                placeholder="+91 9876543210"
+                maxlength="20"
+              />
+            </div>
+
+            <div class="register-only hidden">
+              <label for="usernameInput">Username</label>
+              <input
+                id="usernameInput"
+                type="text"
+                autocomplete="username"
+                placeholder="xcodingninjas"
+                minlength="3"
+                maxlength="24"
+              />
+            </div>
+
+            <div class="register-only hidden">
+              <label for="emailInput">College email</label>
+              <input
+                id="emailInput"
+                type="email"
+                autocomplete="email"
+                placeholder="student@college.edu"
+              />
+            </div>
+
+            <div class="register-only hidden">
+              <label for="genderSelect">Gender</label>
+              <select id="genderSelect">
+                <option value="">Prefer not to say</option>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+
+            <div class="register-only hidden">
+              <label for="departmentInput">Department</label>
+              <input id="departmentInput" type="text" placeholder="Computer Science" maxlength="60" />
+            </div>
+
+            <div class="register-only hidden">
+              <label for="studyYearSelect">Year</label>
+              <select id="studyYearSelect">
+                <option value="">Select year</option>
+                <option value="1">1st year</option>
+                <option value="2">2nd year</option>
+                <option value="3">3rd year</option>
+                <option value="4">4th year</option>
+                <option value="5">5th year</option>
+                <option value="alumni">Alumni</option>
+              </select>
+            </div>
+
+            <label for="passwordInput">Password</label>
+            <div class="password-field">
+              <input
+                id="passwordInput"
+                type="password"
+                autocomplete="current-password"
+                placeholder="Enter "
+                minlength="8"
+                maxlength="64"
+                required
+              />
+              <button
+                class="password-toggle"
+                type="button"
+                data-password-toggle="passwordInput"
+                aria-label="Show password"
+              >
+                Show
+              </button>
+            </div>
+            <p class="field-hint register-only hidden" id="passwordRules">
+              Use 8-64 characters with uppercase, lowercase, number, and symbol.
+              Allowed symbols: ! @ # $ % ^ &amp; * _ - + = . ?
+            </p>
+
+            <div class="login-help login-only" id="loginHelp">
+              <button class="link-btn" type="button" id="forgotPasswordButton">Forgot password?</button>
+            </div>
+
+            <div class="register-only hidden">
+              <label for="confirmPasswordInput">Confirm password</label>
+              <div class="password-field">
+                <input
+                  id="confirmPasswordInput"
+                  type="password"
+                  autocomplete="new-password"
+                  placeholder="Confirm password"
+                  minlength="8"
+                  maxlength="64"
+                />
+                <button
+                  class="password-toggle"
+                  type="button"
+                  data-password-toggle="confirmPasswordInput"
+                  aria-label="Show confirm password"
+                >
+                  Show
+                </button>
+              </div>
+            </div>
+
+            <div class="register-only hidden">
+              <label for="campusSelect">Campus</label>
+              <select id="campusSelect">
+                <option value="Your College">Your College</option>
+                <option value="RIT">RIT</option>
+                <option value="Quantum University">Quantum University</option>
+                <option value="Graphic Era University">Graphic Era University</option>
+                <option value="Motherhood University">Motherhood University</option>
+              </select>
+            </div>
+
+            <button class="primary-btn" id="authSubmitButton" type="submit">Login</button>
+
+            <div class="account-help login-only">
+              <button class="link-btn" type="button" id="accountAccessButton">Can't Access Your Account?</button>
+            </div>
+          </form>
+
+          <div class="auth-footer">
+            <span id="authFooterText">Don't have an account?</span>
+            <button class="link-btn strong-link" type="button" id="authModeLink" data-auth-mode="register">Sign Up</button>
+          </div>
+          <button class="link-btn auth-admin-link" type="button" id="adminModeLink" data-auth-mode="admin">
+            Admin login
+          </button>
+
+          <div class="auth-note">
+            <span class="mini-badge">Backend</span>
+            <span>Users and messages are saved by the backend database.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="chat-shell hidden" id="chatView">
+        <aside class="sidebar" id="sidebar">
+          <div class="sidebar-head">
+            <div class="brand-lockup compact">
+              <div class="brand-mark"><img src="/assets/logo/logo.png" alt="AnonChat logo" /></div>
+              <div>
+                <h2>AnonChat</h2>
+                <p class="eyebrow" id="campusName">Anonymous chat</p>
+              </div>
+            </div>
+            <button class="icon-btn mobile-only" id="closeSidebar" type="button" aria-label="Close rooms">
+              x
+            </button>
+          </div>
+
+          <input class="visually-hidden" id="roomSearch" type="search" aria-hidden="true" tabindex="-1" />
+
+          <nav class="sidebar-menu" id="sidebarMenu" aria-label="Main menu">
+            <button class="menu-button" type="button" data-menu-action="home">
+              <span class="menu-symbol">HM</span>
+              <span>Home</span>
+            </button>
+            <button class="menu-button active" type="button" data-menu-action="join-public">
+              <span class="menu-symbol">CH</span>
+              <span>Chat Room</span>
+            </button>
+            <button class="menu-button" type="button" data-menu-action="profile">
+              <span class="menu-symbol">PF</span>
+              <span>Profile</span>
+            </button>
+            <button class="menu-button" type="button" data-menu-action="create-private">
+              <span class="menu-symbol">+</span>
+              <span>Create Private Room</span>
+            </button>
+            <button class="menu-button" type="button" data-menu-action="my-rooms">
+              <span class="menu-symbol">R</span>
+              <span>My Rooms</span>
+            </button>
+            <button class="menu-button" type="button" data-menu-action="settings">
+              <span class="menu-symbol">S</span>
+              <span>Settings</span>
+            </button>
+            <button class="menu-button notification-menu-button" type="button" data-menu-action="notifications">
+              <span class="menu-symbol notification-symbol">🔔<span class="sidebar-notification-dot hidden" id="sidebarNotificationDot"></span></span>
+              <span>Notifications</span>
+            </button>
+          </nav>
+
+          <nav class="room-list hidden" id="roomList" aria-label="Chat rooms" aria-hidden="true"></nav>
+
+          <div class="sidebar-footer">
+            <button class="profile-chip" id="profileButton" type="button">
+              <span class="avatar" id="profileAvatar">A</span>
+              <span>
+                <strong id="profileName">Anonymous User #482</strong>
+                <small id="profileMeta">Online</small>
+              </span>
+            </button>
+            <button class="menu-button logout-menu-button" id="logoutButton" type="button">
+              <span class="menu-symbol">L</span>
+              <span>Logout</span>
+            </button>
+          </div>
+        </aside>
+
+        <main class="chat-main">
+          <header class="chat-topbar">
+            <button id="hamburgerBtn" class="hamburger-btn mobile-only" type="button" aria-label="Open rooms" aria-expanded="false">
+              <span></span>
+              <span></span>
+              <span></span>
+            </button>
+            <div class="chat-room-topbar-left">
+              <div class="chat-room-title" id="chatRoomTitle">
+              <span class="room-topbar-icon" id="activeRoomIcon" aria-hidden="true">💬</span>
+              <div class="room-heading">
+                <h2><span aria-hidden="true">#</span> <span id="activeRoomName">General Chat</span></h2>
+                <span id="activeRoomMeta">Public Room</span>
+              </div>
+            </div>
+              <div class="chat-search-bar hidden" id="chatSearchBar">
+                <span class="search-icon" aria-hidden="true">🔍</span>
+                <input
+                  type="text"
+                  id="chatSearchInput"
+                  placeholder="Search messages..."
+                  autocomplete="off"
+                />
+                <button class="search-close" id="closeSearchBtn" type="button" aria-label="Close search">✕</button>
+                <small class="chat-search-count hidden" id="chatSearchCount">0 messages found</small>
+              </div>
+            </div>
+            <input class="visually-hidden" id="messageSearch" type="search" aria-hidden="true" tabindex="-1" />
+            <div class="chat-room-topbar-right">
+              <div class="topbar-status">
+                <span class="status-dot"></span>
+                <strong id="topbarOnlineCount">0</strong>
+              </div>
+              <div class="connection-pill offline" id="connectionStatus" data-status="offline" title="Realtime status: Offline" aria-live="polite">
+                <span class="connection-dot" aria-hidden="true"></span>
+                <span data-connection-label>Offline</span>
+              </div>
+              <span class="topbar-separator" aria-hidden="true"></span>
+              <div class="topbar-actions">
+                <button class="icon-btn call-topbar-btn" id="topbarAudioCallButton" type="button" aria-label="Start audio call" title="Audio call">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M7 5c.8 6 6 11.2 12 12l-2.5 3.2c-.4.5-1.1.7-1.7.5C8.8 18.8 5.2 15.2 3.3 9.2c-.2-.6 0-1.3.5-1.7L7 5Z" />
+                  </svg>
+                </button>
+                <button class="icon-btn call-topbar-btn" id="topbarVideoCallButton" type="button" aria-label="Start video call" title="Video call">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="3" y="6" width="12" height="12" rx="3" />
+                    <path d="m15 10 5-3v10l-5-3" />
+                  </svg>
+                </button>
+                <button class="icon-btn" id="topbarSearchButton" type="button" aria-label="Search messages">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="11" cy="11" r="7" />
+                    <path d="m16.5 16.5 4 4" />
+                  </svg>
+                </button>
+                <button class="icon-btn" id="mediaGalleryButton" type="button" aria-label="Shared media gallery" title="Shared media">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="3" y="4" width="18" height="16" rx="3" />
+                    <path d="m7 15 3-3 2.5 2.5L15 12l2 3" />
+                    <circle cx="8.5" cy="8.5" r="1.4" />
+                  </svg>
+                </button>
+                <button class="theme-toggle compact" type="button" data-theme-toggle aria-label="Toggle theme" title="Toggle theme">
+                  <span class="theme-toggle-track" aria-hidden="true"><span class="theme-toggle-thumb">&#127769;</span></span>
+                  <strong class="theme-toggle-label">Dark</strong>
+                </button>
+                <button class="icon-btn notification-btn topbar-hidden-utility" id="notificationButton" type="button" aria-label="Notifications">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M18 9a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z" />
+                    <path d="M10 21h4" />
+                  </svg>
+                  <span class="notification-count hidden" id="notificationCount">0</span>
+                </button>
+                <button class="icon-btn topbar-hidden-utility" id="settingsTopButton" type="button" data-menu-action="settings" aria-label="Settings">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z" />
+                    <path d="M4 12h2M18 12h2M12 4v2M12 18v2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M17.7 6.3l-1.4 1.4M7.7 16.3l-1.4 1.4" />
+                  </svg>
+                </button>
+                <button class="icon-btn" id="togglePanel" type="button" aria-label="Online members">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="9" cy="8" r="3.5" />
+                    <path d="M3.5 19c.9-3.2 10.1-3.2 11 0" />
+                    <circle cx="17" cy="9.5" r="2.5" />
+                    <path d="M15.5 17.5c1.9-.7 4.5-.3 5 1.5" />
+                  </svg>
+                </button>
+                <button class="icon-btn mobile-app-menu-button" id="mobileAppMenuButton" type="button" aria-label="Open app menu" aria-haspopup="dialog" aria-expanded="false" title="Menu" hidden>
+                  <span aria-hidden="true"></span>
+                  <span aria-hidden="true"></span>
+                  <span aria-hidden="true"></span>
+                </button>
+              </div>
+            </div>
+          </header>
+
+          <div class="guideline-notice">
+            <span>Be respectful and follow community guidelines. No spam, no abuse, keep it clean.</span>
+          </div>
+          <section class="home-view hidden" id="homeView" aria-label="Browse rooms"></section>
+          <div class="chat-feed" id="chatFeed" aria-live="polite"></div>
+          <button class="scroll-bottom-button hidden" id="scrollToBottomButton" type="button" aria-label="Scroll to latest messages">
+            <span aria-hidden="true">v</span>
+            <strong id="scrollUnreadBadge" class="hidden">0</strong>
+          </button>
+          <div class="typing-indicator hidden" id="typingIndicator"></div>
+          <div class="reply-preview hidden" id="replyPreview"></div>
+
+          <div class="attachment-preview hidden" id="attachmentPreview"></div>
+          <form class="composer whatsapp-composer" id="messageForm">
+            <div class="voice-recorder-bar hidden" id="voiceRecorderBar" aria-live="polite"></div>
+            <div class="attachment-menu hidden" id="attachmentMenu" aria-label="Attachment options">
+              <button type="button" data-attach-type="document"><span class="menu-icon document">DOC</span>Document</button>
+              <button type="button" data-attach-type="media"><span class="menu-icon media">IMG</span>Photos &amp; Videos</button>
+              <button type="button" data-placeholder-modal="Camera"><span class="menu-icon camera">CAM</span>Camera</button>
+              <button type="button" data-attach-type="audio"><span class="menu-icon audio">AUD</span>Audio</button>
+              <button type="button" data-placeholder-modal="Contact"><span class="menu-icon contact">CON</span>Contact</button>
+              <button type="button" id="pollButton"><span class="menu-icon poll">POLL</span>Poll</button>
+              <button type="button" data-placeholder-modal="Event"><span class="menu-icon event">EV</span>Event</button>
+              <button type="button" data-placeholder-modal="New Sticker"><span class="menu-icon sticker">STK</span>New Sticker</button>
+            </div>
+            <div class="emoji-picker hidden" id="emojiPicker" aria-label="Emoji picker">
+              <button type="button" data-emoji="😀">😀</button>
+              <button type="button" data-emoji="😂">😂</button>
+              <button type="button" data-emoji="🥲">🥲</button>
+              <button type="button" data-emoji="😍">😍</button>
+              <button type="button" data-emoji="🔥">🔥</button>
+              <button type="button" data-emoji="✨">✨</button>
+              <button type="button" data-emoji="👍">👍</button>
+              <button type="button" data-emoji="🙏">🙏</button>
+              <button type="button" data-emoji="🎉">🎉</button>
+              <button type="button" data-emoji="💬">💬</button>
+              <button type="button" data-emoji="🤝">🤝</button>
+              <button type="button" data-emoji="💜">💜</button>
+            </div>
+            <button class="composer-icon plus-button" type="button" id="attachButton" aria-label="Open attachment menu">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+            <button class="composer-icon emoji-button" type="button" id="emojiButton" aria-label="Open emoji picker">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="8.5" />
+                <path d="M8.8 14.2c1.4 1.5 5 1.5 6.4 0" />
+                <path d="M9 10h.01M15 10h.01" />
+              </svg>
+            </button>
+            <button class="visually-hidden" type="button" id="quickConfession">Confess</button>
+            <input
+              class="visually-hidden"
+              id="messageAttachmentInput"
+              type="file"
+              accept="image/*,video/*,.pdf,.doc,.docx,.txt,audio/*"
+            />
+            <textarea
+              id="messageInput"
+              rows="1"
+              maxlength="280"
+              placeholder="Type a message"
+            ></textarea>
+            <button class="composer-action mic-mode" id="voiceButton" type="button" aria-label="Record voice note">
+              <svg class="mic-symbol" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
+                <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+                <path d="M12 18v3M8.5 21h7" />
+              </svg>
+            </button>
+            <button class="composer-action send-mode hidden" id="sendMessageButton" type="submit" aria-label="Send message">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m4 12 15-7-4.5 14-3.2-5.2L4 12Z" />
+                <path d="m11.3 13.8 7.7-8.8" />
+              </svg>
+            </button>
+          </form>
+        </main>
+
+        <aside class="details-panel user-right-panel" id="detailsPanel">
+          <div class="details-head">
+            <span>User Info</span>
+            <button class="icon-btn panel-close" id="closeDetailsPanel" type="button" aria-label="Close details panel">
+              x
+            </button>
+          </div>
+
+          <div class="user-info-panel" id="userInfoPanel"></div>
+
+          <div class="safety-options" id="safetyPanel">
+            <h3>Safety Options</h3>
+            <button type="button" data-safety-action="report-user">Report User</button>
+            <button type="button" data-safety-action="block-user">Block User</button>
+            <button type="button" data-safety-action="clear-chat">Clear Chat</button>
+            <button class="leave-chat-button" type="button" data-safety-action="leave-chat">Leave Chat</button>
+          </div>
+
+          <div class="panel-section hidden" id="pulsePanel"></div>
+          <div class="panel-section hidden" id="profilePanel"></div>
+          <div class="panel-section hidden" id="moderationPanel"></div>
+        </aside>
+      </section>
+
+      <section class="admin-dashboard-view hidden" id="adminDashboardView" aria-label="AnonChat admin dashboard">
+        <div class="admin-dashboard-shell" id="adminDashboardShell"></div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop hidden" id="reportModal">
+      <form class="modal-card" id="reportForm">
+        <div class="modal-head">
+          <h2>Report Message</h2>
+          <button class="icon-btn" type="button" id="closeReportModal" aria-label="Close report modal">x</button>
+        </div>
+        <p class="muted" id="reportPreview">Selected message</p>
+        <label for="reportReason">Reason</label>
+        <select id="reportReason">
+          <option value="Spam">Spam</option>
+          <option value="Harassment">Harassment</option>
+          <option value="Inappropriate">Inappropriate</option>
+          <option value="Hate Speech">Hate Speech</option>
+          <option value="Threats">Threats</option>
+          <option value="Other">Other</option>
+        </select>
+        <button class="primary-btn" type="submit">Submit Report</button>
+      </form>
+    </div>
+
+    <div class="modal-backdrop hidden" id="blockUserModal">
+      <section class="block-user-modal-card" role="dialog" aria-modal="true" aria-labelledby="blockUserTitle">
+        <button class="icon-btn block-modal-close" type="button" id="closeBlockUserModal" aria-label="Close block user modal">x</button>
+        <h2 id="blockUserTitle">&#128683; Block this user?</h2>
+        <p>Blocking "<span id="blockUserName">Anonymous User</span>" will:</p>
+        <ul>
+          <li>Hide their messages</li>
+          <li>They won't know you blocked them</li>
+          <li>You can unblock anytime in Settings</li>
+        </ul>
+        <div class="block-user-actions">
+          <button type="button" id="cancelBlockUserButton">Cancel</button>
+          <button type="button" id="confirmBlockUserButton">Block User</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="delete-sheet-backdrop hidden" id="deleteMessageSheet">
+      <div class="delete-message-sheet" role="dialog" aria-modal="true" aria-labelledby="deleteMessageTitle">
+        <h3 id="deleteMessageTitle">Delete Message?</h3>
+        <button class="delete-sheet-btn delete-for-me" type="button" data-delete-scope="me">Delete for me</button>
+        <button class="delete-sheet-btn delete-for-everyone" type="button" data-delete-scope="everyone">Delete for everyone</button>
+        <button class="delete-sheet-btn delete-cancel" type="button" id="cancelDeleteMessageButton">Cancel</button>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="roomPasswordModal">
+      <div class="modal-card room-password-card" role="dialog" aria-modal="true" aria-labelledby="roomPasswordTitle">
+        <div class="modal-head room-password-head">
+          <div>
+            <h2 id="roomPasswordTitle">&#128274; Password Required</h2>
+            <p>This room is password protected</p>
+          </div>
+          <button class="icon-btn" type="button" id="cancelRoomPassword" aria-label="Cancel room password">x</button>
+        </div>
+        <div class="room-info-preview">
+          <span id="passwordModalRoomIcon" aria-hidden="true">&#128274;</span>
+          <strong id="passwordModalRoomName">Private Room</strong>
+        </div>
+        <label for="roomPasswordInput">Enter Room Password</label>
+        <div class="password-input-wrap">
+          <input id="roomPasswordInput" type="password" placeholder="Enter password..." autocomplete="off" />
+          <button id="toggleRoomPassword" type="button">Show</button>
+        </div>
+        <span id="roomPasswordError" class="field-error hidden">Incorrect password. Try again.</span>
+        <div class="modal-actions">
+          <button class="btn-ghost" type="button" id="cancelRoomPasswordFooter">Cancel</button>
+          <button class="btn-primary" type="button" id="confirmRoomPassword">Join Room &rarr;</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="avatarCropModal">
+      <div class="modal-card crop-card">
+        <div class="modal-head">
+          <h2>Crop profile photo</h2>
+          <button class="icon-btn" type="button" id="closeAvatarCropModal" aria-label="Close crop modal">x</button>
+        </div>
+        <div class="crop-stage">
+          <canvas id="avatarCropCanvas" width="280" height="280" aria-label="Profile photo crop area"></canvas>
+        </div>
+        <label for="avatarZoomInput">Zoom</label>
+        <input id="avatarZoomInput" type="range" min="0.5" max="3" step="0.01" value="1" />
+        <div class="modal-actions">
+          <button class="ghost-btn" type="button" id="cancelAvatarCropButton">Cancel</button>
+          <button class="primary-btn" type="button" id="saveAvatarCropButton">Save Photo</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="passwordResetModal">
+      <form class="modal-card" id="passwordResetForm" novalidate>
+        <div class="modal-head">
+          <h2>Reset password</h2>
+          <button class="icon-btn" type="button" id="closePasswordResetModal" aria-label="Close reset modal">x</button>
+        </div>
+        <p class="muted" id="passwordResetHelp" role="status" aria-live="polite">Enter your email to get a reset OTP.</p>
+        <label for="resetEmailInput">Email</label>
+        <input id="resetEmailInput" type="email" autocomplete="email" />
+        <button class="primary-btn" type="button" id="requestResetButton">Send OTP</button>
+
+        <div class="reset-flow-field hidden" id="resetOtpStep">
+          <label for="resetOtpInput">OTP</label>
+          <input id="resetOtpInput" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" />
+          <button class="primary-btn" type="button" id="verifyResetOtpButton">Verify OTP</button>
+        </div>
+
+        <div class="reset-flow-field hidden" id="resetPasswordStep">
+          <label for="resetPasswordInput">New password</label>
+          <div class="password-field">
+            <input id="resetPasswordInput" type="password" autocomplete="new-password" minlength="8" maxlength="64" />
+            <button class="password-toggle" type="button" data-password-toggle="resetPasswordInput">Show</button>
+          </div>
+          <label for="resetUsernameInput">New username <span class="muted">(optional)</span></label>
+          <input id="resetUsernameInput" type="text" autocomplete="username" maxlength="24" placeholder="Leave unchanged" />
+          <button class="primary-btn" type="submit" id="submitResetPasswordButton">Update password</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="modal-backdrop hidden" id="composerPlaceholderModal">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2 id="composerPlaceholderTitle">Coming soon</h2>
+          <button class="icon-btn" type="button" id="closeComposerPlaceholderModal" aria-label="Close modal">x</button>
+        </div>
+        <div class="muted" id="composerPlaceholderBody">Choose an action to continue.</div>
+        <button class="primary-btn" type="button" id="composerPlaceholderOkButton">Got it</button>
+      </div>
+    </div>
+
+    <div id="chatContextMenu" class="ctx-menu" role="menu" aria-hidden="true" style="display:none">
+      <button class="ctx-btn" type="button" role="menuitem" data-action="open">
+        <span class="ctx-icon" aria-hidden="true">&#128172;</span>
+        Open Chat
+      </button>
+      <button class="ctx-btn" type="button" role="menuitem" data-action="pin">
+        <span class="ctx-icon" aria-hidden="true">&#128204;</span>
+        Pin Chat
+      </button>
+      <button class="ctx-btn" type="button" role="menuitem" data-action="rename">
+        <span class="ctx-icon" aria-hidden="true">&#9999;&#65039;</span>
+        Rename
+      </button>
+      <button class="ctx-btn" type="button" role="menuitem" data-action="archive">
+        <span class="ctx-icon" aria-hidden="true">&#128230;</span>
+        Archive
+      </button>
+      <div class="ctx-divider"></div>
+      <button class="ctx-btn ctx-danger" type="button" role="menuitem" data-action="delete">
+        <span class="ctx-icon" aria-hidden="true">&#128465;&#65039;</span>
+        Delete Chat
+      </button>
+    </div>
+
+    <div id="imageLightbox" style="display:none">
+      <div id="lightboxOverlay"></div>
+      <div id="lightboxContent" class="media-viewer-content">
+        <div class="media-viewer-toolbar">
+          <button id="lightboxZoomOut" type="button" aria-label="Zoom out">−</button>
+          <button id="lightboxZoomIn" type="button" aria-label="Zoom in">+</button>
+          <button id="lightboxDownload" type="button" aria-label="Download media">↓</button>
+          <button id="lightboxShare" type="button" aria-label="Share media">↗</button>
+          <button id="lightboxClose" type="button" aria-label="Close media">&#10005;</button>
+        </div>
+        <div id="lightboxStage">
+        <img id="lightboxImg" src="" alt="" crossorigin="anonymous" referrerpolicy="no-referrer" />
+          <video id="lightboxVideo" class="hidden" controls playsinline crossorigin="anonymous" referrerpolicy="no-referrer"></video>
+          <audio id="lightboxAudio" class="hidden" controls crossorigin="anonymous" referrerpolicy="no-referrer"></audio>
+        </div>
+        <div id="lightboxCaption"></div>
+      </div>
+    </div>
+
+    <div id="messageContextMenu" class="message-context-menu" role="menu" aria-hidden="true" style="display:none"></div>
+
+    <div id="mediaGalleryModal" class="media-gallery-modal hidden" role="dialog" aria-modal="true" aria-labelledby="mediaGalleryTitle">
+      <div class="media-gallery-overlay" id="mediaGalleryOverlay"></div>
+      <section class="media-gallery-drawer">
+        <header class="media-gallery-head">
+          <div>
+            <h3 id="mediaGalleryTitle">Shared Media</h3>
+            <p id="mediaGallerySubtitle">Images, videos, voice notes, files, and links from this chat.</p>
+          </div>
+          <button class="icon-btn" type="button" id="closeMediaGallery" aria-label="Close media gallery">x</button>
+        </header>
+        <nav class="media-gallery-tabs" aria-label="Media gallery tabs">
+          <button type="button" class="active" data-gallery-tab="images">Images</button>
+          <button type="button" data-gallery-tab="videos">Videos</button>
+          <button type="button" data-gallery-tab="voice">Voice Notes</button>
+          <button type="button" data-gallery-tab="files">Files</button>
+          <button type="button" data-gallery-tab="links">Links</button>
+        </nav>
+        <div class="media-gallery-grid" id="mediaGalleryGrid"></div>
+      </section>
+    </div>
+
+    <div id="userProfilePanel" class="hidden">
+      <div class="profile-overlay"></div>
+      <div class="profile-drawer" role="dialog" aria-modal="true" aria-labelledby="profilePanelTitle">
+        <div class="profile-header">
+          <button id="closeProfilePanel" type="button" aria-label="Close user info">&#10005;</button>
+          <h3 id="profilePanelTitle">User Info</h3>
+        </div>
+
+        <div class="profile-avatar-section">
+          <div id="viewAvatar" class="big-avatar"></div>
+          <h2 id="viewName"></h2>
+          <span id="viewUsername"></span>
+        </div>
+
+        <div class="profile-info-list">
+          <div class="info-row">
+            <span class="info-label">About</span>
+            <span id="viewAbout"></span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Department</span>
+            <span id="viewDept"></span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Campus</span>
+            <span id="viewCampus"></span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Joined</span>
+            <span id="viewJoined"></span>
+          </div>
+        </div>
+
+        <div class="profile-actions">
+          <button class="btn-call-user" type="button" id="audioCallFromProfile">
+            &#128222; Audio Call
+          </button>
+          <button class="btn-call-user" type="button" id="videoCallFromProfile">
+            &#128249; Video Call
+          </button>
+          <button class="btn-block-user" type="button" id="blockFromProfile">
+            &#128683; Block User
+          </button>
+          <button class="btn-report-user" type="button" id="reportFromProfile">
+            &#128681; Report User
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="callLayer" class="call-layer hidden" aria-live="polite">
+      <div class="incoming-call-card hidden" id="incomingCallCard">
+        <div class="call-avatar" id="incomingCallAvatar">A</div>
+        <strong id="incomingCallName">Anonymous User</strong>
+        <span id="incomingCallType">Incoming call</span>
+        <div class="incoming-call-actions">
+          <button class="call-control reject" type="button" id="rejectCallButton">Decline</button>
+          <button class="call-control accept" type="button" id="acceptCallButton">Accept</button>
+        </div>
+      </div>
+
+      <section class="call-screen hidden" id="callScreen" aria-label="AnonChat call">
+        <div class="call-remote-stage">
+          <video id="remoteVideo" autoplay playsinline></video>
+          <div class="audio-call-focus" id="audioCallFocus">
+            <div class="call-avatar large" id="callPeerAvatar">A</div>
+            <h2 id="callPeerName">Anonymous User</h2>
+            <p id="callStatusText">Calling...</p>
+            <span id="callDuration">00:00</span>
+          </div>
+          <video id="localVideo" autoplay playsinline muted></video>
+        </div>
+        <div class="call-controls">
+          <button class="call-control" type="button" id="muteCallButton">Mute</button>
+          <button class="call-control" type="button" id="cameraCallButton">Camera</button>
+          <button class="call-control" type="button" id="switchCameraButton">Switch</button>
+          <button class="call-control" type="button" id="fullscreenCallButton">Full</button>
+          <button class="call-control" type="button" id="minimizeCallButton">Mini</button>
+          <button class="call-control end" type="button" id="endCallButton">End</button>
+        </div>
+      </section>
+      <button class="floating-call-widget hidden" id="floatingCallWidget" type="button" aria-label="Return to active call">
+        <span class="call-avatar" id="floatingCallAvatar">A</span>
+        <span>
+          <strong id="floatingCallName">AnonChat Call</strong>
+          <em id="floatingCallStatus">00:00</em>
+        </span>
+      </button>
+    </div>
+
+    <div class="mobile-app-menu hidden" id="mobileAppMenu" role="dialog" aria-modal="true" aria-labelledby="mobileAppMenuTitle">
+      <div class="mobile-app-menu-overlay" data-mobile-menu-close></div>
+      <section class="mobile-app-menu-sheet" tabindex="-1">
+        <div class="mobile-app-menu-head">
+          <div>
+            <span>AnonChat</span>
+            <h3 id="mobileAppMenuTitle">Menu</h3>
+          </div>
+          <button class="icon-btn" type="button" data-mobile-menu-close aria-label="Close menu">&times;</button>
+        </div>
+        <nav class="mobile-app-nav" aria-label="Mobile navigation">
+          <button type="button" data-mobile-menu-action="home">Home</button>
+          <button type="button" data-mobile-menu-action="chat">Chat Rooms</button>
+          <button type="button" data-mobile-menu-action="my-rooms">My Rooms</button>
+          <button type="button" data-mobile-menu-action="create-private">Create Private Room</button>
+          <button type="button" data-mobile-menu-action="profile">Profile</button>
+          <button type="button" data-mobile-menu-action="settings">Settings</button>
+          <button type="button" data-mobile-menu-action="notifications">Notifications</button>
+          <button type="button" data-mobile-menu-action="logout" class="danger">Logout</button>
+        </nav>
+        <div class="mobile-room-switcher">
+          <p>Switch Room</p>
+          <div class="mobile-room-list" id="mobileMenuRooms"></div>
+        </div>
+      </section>
+    </div>
+
+    <button class="pwa-install-button hidden" id="pwaInstallButton" type="button" aria-label="Install App" title="Install App">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3v10" />
+        <path d="m8 9 4 4 4-4" />
+        <path d="M5 15v3a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-3" />
+      </svg>
+    </button>
+
+    <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+  </body>
+</html>

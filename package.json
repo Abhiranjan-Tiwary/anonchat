@@ -1,0 +1,49 @@
+{
+  "name": "anonchat",
+  "version": "1.0.0",
+  "description": "Full-stack anonymous college chat app with Node.js APIs, register/login auth, MongoDB persistence, moderation, and live updates.",
+  "private": true,
+  "main": "server/server.js",
+  "workspaces": [
+    "client"
+  ],
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "node server/server.js",
+    "server:dev": "node server/server.js",
+    "client:dev": "npm run dev --prefix client",
+    "client:build": "npm run build --prefix client",
+    "client:preview": "npm run preview --prefix client"
+  },
+  "keywords": [
+    "anonymous-chat",
+    "college",
+    "node",
+    "portfolio"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.10.0",
+    "compression": "^1.8.1",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-mongo-sanitize": "^2.2.0",
+    "express-rate-limit": "^8.5.1",
+    "helmet": "^8.1.0",
+    "hpp": "^0.2.3",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.6.1",
+    "multer": "^2.1.1",
+    "multer-storage-cloudinary": "^2.2.1",
+    "nanoid": "^5.1.11",
+    "nodemailer": "^8.0.7",
+    "socket.io": "^4.8.3",
+    "xss-clean": "^0.1.4"
+  }
+}
