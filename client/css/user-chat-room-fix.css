@@ -3125,3 +3125,55 @@ html[data-theme="light"] :where(.mobile-app-menu-overlay, .profile-overlay, .mod
 html[data-theme="light"] :where(.status-dot, .topbar-status span, .connection-pill::before) {
   box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12) !important;
 }
+
+/* Auth route mobile scroll guard. */
+html.auth-route-scroll,
+body.auth-route-scroll {
+  min-height: 100%;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior-y: contain;
+}
+
+body.auth-route-scroll {
+  min-height: 100dvh;
+}
+
+.auth-route-mode input,
+.auth-route-mode select,
+.auth-route-mode textarea {
+  scroll-margin-block: 96px calc(env(safe-area-inset-bottom) + 96px);
+}
+
+@media (max-width: 768px) {
+  body.auth-route-scroll .app-root {
+    min-height: 100dvh !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  body.auth-route-scroll .auth-view.auth-route-mode {
+    min-height: 100vh !important;
+    min-height: 100dvh !important;
+    height: auto !important;
+    display: block !important;
+    padding: 16px 16px calc(env(safe-area-inset-bottom) + 32px) !important;
+    overflow: visible !important;
+    overscroll-behavior-y: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body.auth-route-scroll .auth-route-mode .auth-panel {
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 auto !important;
+    touch-action: pan-y;
+  }
+}
+
+@media (max-width: 380px) {
+  body.auth-route-scroll .auth-view.auth-route-mode {
+    padding: 12px 12px calc(env(safe-area-inset-bottom) + 32px) !important;
+  }
+}

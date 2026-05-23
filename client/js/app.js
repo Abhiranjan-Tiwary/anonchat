@@ -931,6 +931,20 @@ function isAuthRoute(route = state.route) {
   return route === LOGIN_ROUTE || route === SIGNUP_ROUTE || route === ADMIN_LOGIN_ROUTE;
 }
 
+function setAuthRouteScroll(enabled) {
+  document.documentElement.classList.toggle("auth-route-scroll", enabled);
+  document.body.classList.toggle("auth-route-scroll", enabled);
+  if (enabled) document.body.style.overflow = "";
+}
+
+function primeAuthRouteScroll() {
+  const enabled = isAuthRoute(normalizeRoute(window.location.pathname));
+  setAuthRouteScroll(enabled);
+  document.querySelector("#authView")?.classList.toggle("auth-route-mode", enabled);
+}
+
+primeAuthRouteScroll();
+
 function isChatRoute(route = state.route) {
   return USER_ROUTE_VALUES.includes(route);
 }
@@ -3934,6 +3948,7 @@ function joinActiveRoom() {
 function renderAuthShell() {
   elements.authView.classList.toggle("hidden", isChatRoute(state.route) || isAdminRoute(state.route));
   elements.authView.classList.toggle("auth-route-mode", isAuthRoute(state.route));
+  setAuthRouteScroll(isAuthRoute(state.route));
   elements.chatView.classList.add("hidden");
   elements.adminDashboardView?.classList.add("hidden");
   elements.authOnlineCount.textContent = "Connecting...";
@@ -3951,9 +3966,11 @@ function render() {
   const showNotificationsPage = showChat && route === NOTIFICATIONS_ROUTE;
   const showContentPage = showHome || showMyRooms || showSettings || showProfile || showNotificationsPage;
   const showLanding = !showChat && !showAdminDashboard;
+  const showAuthRoute = showLanding && isAuthRoute(route);
 
-  elements.authView.classList.toggle("auth-route-mode", showLanding && isAuthRoute(route));
+  elements.authView.classList.toggle("auth-route-mode", showAuthRoute);
   elements.authView.classList.toggle("hidden", !showLanding);
+  setAuthRouteScroll(showAuthRoute);
   elements.chatView.classList.toggle("hidden", !showChat);
   elements.chatView.classList.toggle("admin-mode", Boolean(loggedIn && isAdmin()));
   elements.chatView.classList.toggle("user-dashboard", Boolean(loggedIn && !isAdmin()));
