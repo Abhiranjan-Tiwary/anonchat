@@ -10731,3 +10731,53 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb {
     padding-bottom: 140px !important;
   }
 }
+/* REAL FINAL MOBILE FULL PAGE SCROLL FIX */
+@media (max-width: 768px) {
+  html,
+  body {
+    width: 100% !important;
+    height: auto !important;
+    min-height: 100dvh !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    position: static !important;
+    touch-action: auto !important;
+  }
+
+  body:has(#authView:not(.hidden)),
+  body:has(#authView:not(.hidden)) .app-root,
+  body:has(#authView:not(.hidden)) #authView,
+  body:has(#authView:not(.hidden)) .auth-view {
+    height: auto !important;
+    min-height: 100dvh !important;
+    max-height: none !important;
+    overflow: visible !important;
+    overflow-y: visible !important;
+    position: relative !important;
+    display: block !important;
+  }
+
+  body:has(#authView:not(.hidden)) .auth-visual,
+  body:has(#authView:not(.hidden)) .auth-brand-panel,
+  body:has(#authView:not(.hidden)) .auth-panel {
+    position: relative !important;
+    inset: auto !important;
+    transform: none !important;
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  body:has(#authView:not(.hidden)) .auth-panel {
+    margin: 20px auto 120px !important;
+    padding: 20px 16px 140px !important;
+  }
+
+  body:has(#authView:not(.hidden)) .auth-form {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding-bottom: 120px !important;
+  }
+}
