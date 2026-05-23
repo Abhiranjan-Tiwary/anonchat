@@ -45,5 +45,10 @@
     "nodemailer": "^8.0.7",
     "socket.io": "^4.8.3",
     "xss-clean": "^0.1.4"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^4.3.0"
   }
 }
