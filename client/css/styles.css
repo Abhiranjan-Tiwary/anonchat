@@ -1,3 +1,41 @@
+/* Fix login panel showing behind landing */
+@media (max-width: 768px) {
+  .auth-panel,
+  #authPanel,
+  .auth-brand-panel,
+  aside[aria-label="AnonChat sign in benefits"] {
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    z-index: 50 !important;
+    transform: translateY(100%) !important;
+  }
+
+  .auth-panel.visible,
+  #authPanel.visible,
+  .auth-panel.open,
+  #authPanel.open {
+    transform: translateY(0) !important;
+  }
+
+  /* Landing page full height */
+  .auth-view,
+  #authView,
+  section.auth-view {
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  /* Hide auth visual behind landing */
+  .auth-visual,
+  .hero-copy,
+  .auth-view > .auth-visual {
+    position: relative !important;
+    z-index: 1 !important;
+  }
+}
+
 /* ===== MOBILE SCROLL FIX ===== */
 html {
   overflow-x: hidden;
