@@ -10704,3 +10704,400 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb {
   max-width: fit-content !important;
   white-space: nowrap !important;
 }
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (min-width: 769px) {
+  .landing-links {
+    display: flex !important;
+  }
+
+  .landing-nav {
+    grid-template-columns: auto minmax(0, 1fr) auto !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .landing-links {
+    display: none !important;
+  }
+}
+
+/* ===== FINAL MOBILE FIX ===== */
+
+/* Prevent horizontal overflow everywhere */
+html,
+body {
+  overflow-x: hidden !important;
+  max-width: 100vw !important;
+}
+
+/* Landing page mobile */
+@media (max-width: 768px) {
+  /* Navbar */
+  .landing-nav {
+    grid-template-columns: auto 1fr auto !important;
+    padding: 0 16px !important;
+    min-height: 56px !important;
+    width: 100% !important;
+    max-width: 100vw !important;
+    box-sizing: border-box !important;
+  }
+
+  /* Hide extra nav buttons on small screens */
+  .landing-nav .ghost-btn.nav-cta {
+    display: none !important;
+  }
+
+  /* Hero section */
+  .auth-visual {
+    grid-template-columns: 1fr !important;
+    width: calc(100% - 32px) !important;
+    max-width: 100% !important;
+    padding: 24px 0 !important;
+    margin: 0 auto !important;
+    overflow: hidden !important;
+  }
+
+  /* Hero title */
+  .hero-copy h1 {
+    font-size: clamp(2rem, 9vw, 3rem) !important;
+    overflow-wrap: break-word !important;
+    word-break: break-word !important;
+  }
+
+  /* Hide chat preview card */
+  .product-preview,
+  .auth-view .product-preview {
+    display: none !important;
+  }
+
+  /* Buttons full width */
+  .hero-actions {
+    flex-direction: column !important;
+    gap: 10px !important;
+  }
+
+  .hero-actions .primary-btn,
+  .hero-actions .ghost-btn {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  /* Feature grid single column */
+  .hero-feature-grid,
+  .auth-view .hero-feature-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  /* How it works */
+  .how-rail {
+    grid-template-columns: 1fr !important;
+  }
+
+  .how-rail div:not(:last-child)::after {
+    display: none !important;
+  }
+
+  /* Footer */
+  .landing-footer {
+    grid-template-columns: 1fr !important;
+    padding: 32px 16px !important;
+  }
+
+  /* Chat section mobile */
+  .chat-shell.user-dashboard {
+    display: block !important;
+    height: 100dvh !important;
+    overflow: hidden !important;
+  }
+
+  /* Sidebar hidden by default */
+  .chat-shell.user-dashboard .sidebar,
+  #sidebar,
+  .sidebar {
+    position: fixed !important;
+    left: -290px !important;
+    top: 0 !important;
+    height: 100dvh !important;
+    width: 280px !important;
+    z-index: 200 !important;
+    transition: left 0.25s ease !important;
+    overflow-y: auto !important;
+  }
+
+  .chat-shell.user-dashboard .sidebar.open,
+  #sidebar.open,
+  .sidebar.open {
+    left: 0 !important;
+    box-shadow: 4px 0 32px rgba(0, 0, 0, 0.6) !important;
+  }
+
+  /* Chat main full width */
+  .chat-shell.user-dashboard .chat-main,
+  .chat-main {
+    width: 100% !important;
+    height: 100dvh !important;
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    grid-template-rows: 56px minmax(0, 1fr) auto !important;
+    overflow: hidden !important;
+  }
+
+  /* Hide online members panel */
+  .details-panel,
+  #detailsPanel,
+  .chat-shell.user-dashboard .details-panel {
+    display: none !important;
+  }
+
+  /* Chat feed */
+  .chat-feed {
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    padding: 12px !important;
+  }
+
+  /* Message bubbles */
+  .message-card {
+    max-width: 82vw !important;
+  }
+
+  /* Topbar */
+  .chat-topbar {
+    height: 56px !important;
+    min-height: 56px !important;
+    padding: 0 12px !important;
+  }
+
+  /* Admin panel */
+  .admin-dashboard-shell {
+    display: block !important;
+  }
+
+  .admin-sidebar {
+    position: fixed !important;
+    left: -260px !important;
+    top: 0 !important;
+    height: 100dvh !important;
+    width: 250px !important;
+    z-index: 200 !important;
+    transition: left 0.25s ease !important;
+  }
+
+  .admin-dashboard-view.sidebar-open .admin-sidebar {
+    left: 0 !important;
+  }
+
+  .admin-main {
+    margin-left: 0 !important;
+    width: 100% !important;
+  }
+
+  .admin-stat-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  /* Settings page */
+  .settings-page {
+    padding: 16px !important;
+  }
+
+  /* Login page */
+  .auth-panel {
+    width: calc(100% - 32px) !important;
+    max-width: 100% !important;
+    margin: 16px auto !important;
+    padding: 24px 16px !important;
+    box-sizing: border-box !important;
+  }
+
+  .auth-brand-panel {
+    display: none !important;
+  }
+
+  /* Room cards */
+  .home-room-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .landing-nav .primary-btn.nav-cta {
+    display: none !important;
+  }
+
+  .admin-stat-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ===== SCROLL FIX - MUST BE LAST ===== */
+
+/* Landing page scroll */
+html,
+body {
+  overflow-x: hidden !important;
+}
+
+/* When landing page is showing */
+body:has(#authView:not(.hidden)) {
+  overflow-y: auto !important;
+  height: auto !important;
+  min-height: 100dvh !important;
+  position: static !important;
+}
+
+body:has(#authView:not(.hidden)) .app-root {
+  overflow: visible !important;
+  height: auto !important;
+  min-height: 100dvh !important;
+}
+
+body:has(#authView:not(.hidden)) #authView,
+body:has(#authView:not(.hidden)) .auth-view {
+  overflow: visible !important;
+  height: auto !important;
+  min-height: 100dvh !important;
+  display: block !important;
+}
+
+/* Auth panel (login/register) scroll */
+body:has(.auth-modal-open) .auth-panel,
+.auth-panel {
+  overflow-y: auto !important;
+  max-height: 90vh !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+/* Chat view - keep overflow hidden */
+body:has(#chatView:not(.hidden)) {
+  overflow: hidden !important;
+}
+
+body:has(#chatView:not(.hidden)) .chat-feed {
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior: contain !important;
+}
+
+/* Register/Signup form scroll */
+.auth-form,
+.auth-panel .auth-form {
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  max-height: none !important;
+}
+
+@media (max-width: 768px) {
+  /* Landing scroll */
+  html {
+    overflow-y: auto !important;
+    scroll-behavior: smooth !important;
+  }
+
+  body {
+    overflow-x: hidden !important;
+    min-height: 100dvh !important;
+    height: auto !important;
+  }
+
+  .app-root {
+    height: auto !important;
+    min-height: 100dvh !important;
+    overflow: visible !important;
+  }
+
+  #authView,
+  .auth-view {
+    height: auto !important;
+    min-height: 100dvh !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    -webkit-overflow-scrolling: touch !important;
+    touch-action: pan-y !important;
+    display: block !important;
+  }
+
+  /* Register form full scroll */
+  .auth-panel {
+    position: relative !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    transform: none !important;
+    top: auto !important;
+    left: auto !important;
+    margin: 20px auto !important;
+    padding: 24px 16px 60px !important;
+    width: calc(100% - 32px) !important;
+    max-width: 480px !important;
+  }
+
+  .auth-form {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  /* Landing page sections scroll */
+  .auth-visual,
+  .how-it-works,
+  .landing-footer,
+  .hero-feature-grid {
+    overflow: visible !important;
+    height: auto !important;
+  }
+}
+
+/* ===== NAVBAR CUT OFF FIX ===== */
+
+@media (max-width: 768px) {
+  .landing-nav {
+    overflow: hidden !important;
+    width: 100% !important;
+    max-width: 100vw !important;
+    box-sizing: border-box !important;
+    padding: 0 12px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 8px !important;
+  }
+
+  /* Hide the secondary nav CTA on small screens. */
+  body:has(#authView:not(.hidden)) .landing-nav .primary-btn.nav-cta,
+  .landing-nav .primary-btn.nav-cta {
+    display: none !important;
+  }
+
+  /* Show only Login button. */
+  body:has(#authView:not(.hidden)) .landing-nav .ghost-btn.nav-cta,
+  .landing-nav .ghost-btn.nav-cta {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-width: 70px !important;
+    max-width: 80px !important;
+    padding: 0 12px !important;
+    font-size: 0.76rem !important;
+    white-space: nowrap !important;
+  }
+}
+
+@media (max-width: 375px) {
+  body:has(#authView:not(.hidden)) .landing-nav button,
+  .landing-nav .nav-cta {
+    display: none !important;
+  }
+
+  .landing-nav {
+    grid-template-columns: 1fr !important;
+    justify-content: flex-start !important;
+  }
+}
+
+/* ===== END OF SCROLL AND NAVBAR FIX ===== */
