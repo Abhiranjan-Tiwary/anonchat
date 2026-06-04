@@ -1291,6 +1291,21 @@
 
 .home-room-card {
   position: relative !important;
+  cursor: pointer !important;
+}
+
+.chat-shell.user-dashboard.chat-room-dashboard .sidebar-dm-title,
+.chat-shell.user-dashboard.chat-room-dashboard #sidebarDmList,
+.chat-shell.user-dashboard.chat-room-dashboard .sidebar-dm-list {
+  display: none !important;
+}
+
+.chat-shell.user-dashboard.chat-room-dashboard .room-channel-prefix {
+  display: none !important;
+}
+
+.chat-shell.user-dashboard.chat-room-dashboard .sidebar-section-title::before {
+  content: none !important;
 }
 
 .room-lock-badge {

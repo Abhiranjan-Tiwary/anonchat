@@ -736,6 +736,7 @@ window.addEventListener("beforeunload", () => {
   });
 
   elements.sidebarDmList?.addEventListener("click", (event) => {
+    if (elements.sidebarDmList.hidden) return;
     const profileTrigger = event.target.closest("[data-profile-author-id]");
     if (!profileTrigger) return;
     openUserProfileFromTrigger(profileTrigger);
@@ -743,6 +744,7 @@ window.addEventListener("beforeunload", () => {
   });
 
   elements.homeView?.addEventListener("click", handleHomeViewClick);
+  elements.homeView?.addEventListener("keydown", handleHomeViewKeydown);
   elements.homeView?.addEventListener("click", handleProfilePanelClick);
   elements.homeView?.addEventListener("change", handleProfilePanelChange);
 
@@ -1204,7 +1206,7 @@ function handleGlobalClickFallback(event) {
   }
 
   const dmProfile = target.closest?.(".slack-dm-list [data-profile-author-id]");
-  if (dmProfile) {
+  if (dmProfile && !elements.sidebarDmList?.hidden) {
     claimClick(event);
     openUserProfileFromTrigger(dmProfile);
     closeMobileSidebar();
@@ -1580,20 +1582,8 @@ async function startSocialAuth(provider) {
   }
 
   const label = normalizedProvider === "google" ? "Google" : "Facebook";
-  const popup = window.open(
-    "",
-    `anonchat-${normalizedProvider}-auth`,
-    "width=520,height=720,menubar=no,toolbar=no,location=yes,status=no,resizable=yes,scrollbars=yes"
-  );
-
-  if (!popup) {
-    toast(`Allow popups to continue with ${label}.`);
-    return;
-  }
-
-  popup.location.href = `/api/auth/social/${encodeURIComponent(normalizedProvider)}/start?${params.toString()}`;
-  popup.focus?.();
-  toast(`Continue with ${label} in the popup.`);
+  toast(`Redirecting to ${label}...`);
+  window.location.assign(`/api/auth/social/${encodeURIComponent(normalizedProvider)}/start?${params.toString()}`);
 }
 
 function bindSocialAuthListener() {
@@ -4605,6 +4595,18 @@ function renderSidebarRooms() {
 
 function renderSidebarDirectMessages() {
   if (!elements.sidebarDmList || isAdmin()) return;
+  elements.sidebarDmList.innerHTML = "";
+  elements.sidebarDmList.hidden = true;
+  elements.sidebarDmList.setAttribute("aria-hidden", "true");
+  elements.sidebarDmList.classList.add("hidden");
+  const title = elements.sidebarDmList.previousElementSibling;
+  if (title?.classList.contains("sidebar-dm-title")) {
+    title.hidden = true;
+    title.setAttribute("aria-hidden", "true");
+    title.classList.add("hidden");
+  }
+  return;
+
   const activeRoom = getActiveRoom();
   const currentUserId = state.session?.user?.id;
   const query = String(elements.roomSearch?.value || "").trim().toLowerCase();
@@ -5311,11 +5313,17 @@ function markAllNotificationsRead() {
 function renderHomeRoomCard(room) {
   const onlineCount = room.onlineMembers ?? room.activeMembers ?? 0;
   const locked = roomRequiresPassword(room);
+  const roomName = room.name || "Room";
   return `
-    <article class="home-room-card">
+    <article
+      class="home-room-card"
+      role="button"
+      tabindex="0"
+      data-home-room-id="${escapeAttr(room.id)}"
+      aria-label="Join ${escapeAttr(roomName)}">
       ${locked ? `<span class="room-lock-badge">&#128274; Private</span>` : ""}
       <div class="home-room-icon" style="--room-color:${escapeAttr(room.color)}">${escapeHtml(room.icon)}</div>
-      <h3>${escapeHtml(room.name)}</h3>
+      <h3>${escapeHtml(roomName)}</h3>
       <div class="home-room-online"><span></span>${numberText(onlineCount)} online</div>
       <p>${escapeHtml(room.desc || room.description || "Public anonymous room")}</p>
       <div class="home-room-actions">
@@ -6606,6 +6614,15 @@ async function handleHomeViewClick(event) {
   const button = event.target.closest("[data-home-room-id]");
   if (!button) return;
   handleJoinRoom(button.dataset.homeRoomId);
+}
+
+function handleHomeViewKeydown(event) {
+  if (!["Enter", " "].includes(event.key)) return;
+  if (event.target.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
+  const roomCard = event.target.closest(".home-room-card[data-home-room-id]");
+  if (!roomCard) return;
+  event.preventDefault();
+  handleJoinRoom(roomCard.dataset.homeRoomId);
 }
 
 async function editMyRoom(roomId) {
@@ -9654,7 +9671,7 @@ function updateUserRightPanel() {
   const roomName = card.querySelector("[data-current-room]");
   const category = card.querySelector("[data-current-category]");
   if (label) label.textContent = memberLabel;
-  if (roomName) roomName.textContent = `# ${activeRoom.name || "General Chat"}`;
+  if (roomName) roomName.textContent = activeRoom.name || "General Chat";
   if (category) category.textContent = activeRoom.category || "Public Room";
   updateCallButtonsAvailability();
 }

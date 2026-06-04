@@ -35,12 +35,12 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/css/styles.css?v=social-oauth-20260604" />
-    <link rel="stylesheet" href="/css/landing-nav-fix.css?v=social-oauth-20260604" />
-    <link rel="stylesheet" href="/css/auth-page-fix.css?v=social-oauth-20260604" />
-    <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=social-oauth-20260604" />
+    <link rel="stylesheet" href="/css/styles.css?v=social-same-tab-20260605" />
+    <link rel="stylesheet" href="/css/landing-nav-fix.css?v=social-same-tab-20260605" />
+    <link rel="stylesheet" href="/css/auth-page-fix.css?v=social-same-tab-20260605" />
+    <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=social-same-tab-20260605" />
     <script src="/socket.io/socket.io.js" async data-socket-client-loader onerror="this.dataset.failed='true'"></script>
-<script src="/js/app.js?v=social-oauth-20260604" defer></script>
+<script src="/js/app.js?v=social-same-tab-20260605" defer></script>
   </head>
   <body>
     <div id="sidebarOverlay"></div>
@@ -452,10 +452,10 @@
             </button>
           </nav>
 
-          <div class="sidebar-section-title">
+          <div class="sidebar-section-title sidebar-dm-title" hidden aria-hidden="true">
             <span>Direct Messages</span>
           </div>
-          <nav class="slack-dm-list" id="sidebarDmList" aria-label="Direct messages"></nav>
+          <nav class="slack-dm-list sidebar-dm-list" id="sidebarDmList" aria-label="Direct messages" hidden aria-hidden="true"></nav>
 
           <div class="sidebar-footer">
             <button class="profile-chip" id="profileButton" type="button">
@@ -483,7 +483,7 @@
               <div class="chat-room-title" id="chatRoomTitle">
               <span class="room-topbar-icon" id="activeRoomIcon" aria-hidden="true">💬</span>
               <div class="room-heading">
-                <h2><span aria-hidden="true">#</span> <span id="activeRoomName">General Chat</span></h2>
+                <h2><span class="room-channel-prefix" aria-hidden="true" hidden>#</span><span id="activeRoomName">General Chat</span></h2>
                 <span id="activeRoomMeta">Public Room</span>
               </div>
             </div>

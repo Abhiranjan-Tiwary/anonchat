@@ -4683,12 +4683,18 @@ button[data-settings-action="save-settings"]:hover {
   background: rgba(17, 18, 28, 0.76);
   padding: 22px;
   transition: all 0.2s ease;
+  cursor: pointer;
 }
 
 .home-room-card:hover {
   transform: translateY(-4px) scale(1.02);
   border-color: rgba(108, 99, 255, 0.3);
   box-shadow: 0 12px 32px rgba(108, 99, 255, 0.15);
+}
+
+.home-room-card:focus-visible {
+  outline: 2px solid rgba(96, 165, 250, 0.85);
+  outline-offset: 3px;
 }
 
 .home-room-icon {
