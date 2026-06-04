@@ -28,12 +28,65 @@ const normalizeEmail = (email) => String(email || '').toLowerCase().trim()
 
 const normalizeUsername = (username) => String(username || '').toLowerCase().trim()
 
+const normalizeDateOfBirth = (value) => {
+  const text = String(value || '').trim()
+  if (!text) {
+    const error = new Error('Date of birth is required.')
+    error.status = 400
+    throw error
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const error = new Error('Enter a valid date of birth.')
+    error.status = 400
+    throw error
+  }
+
+  const date = new Date(`${text}T00:00:00.000Z`)
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) {
+    const error = new Error('Enter a valid date of birth.')
+    error.status = 400
+    throw error
+  }
+
+  const today = new Date()
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+  if (date.getTime() > todayUtc) {
+    const error = new Error('Date of birth cannot be in the future.')
+    error.status = 400
+    throw error
+  }
+
+  return date
+}
+
+const formatDateOfBirth = (value) => {
+  if (!value) return ''
+  const date = value instanceof Date ? value : new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10)
+}
+
+const validatePassword = (password) => {
+  const allowedPattern = /^[A-Za-z0-9!@#$%^&*_\-+=.?]{8,64}$/
+  if (
+    !allowedPattern.test(password) ||
+    !/[A-Z]/.test(password) ||
+    !/[a-z]/.test(password) ||
+    !/[0-9]/.test(password) ||
+    !/[!@#$%^&*_\-+=.?]/.test(password)
+  ) {
+    const error = new Error('Use 8-64 characters with uppercase, lowercase, number, and symbol.')
+    error.status = 400
+    throw error
+  }
+}
+
 const safeUser = (user) => ({
   id: String(user._id),
   fullName: user.fullName,
   name: user.fullName,
   username: user.username,
   email: user.email,
+  dateOfBirth: formatDateOfBirth(user.dateOfBirth),
   contactNumber: user.contactNumber,
   gender: user.gender,
   department: user.department,
@@ -62,21 +115,29 @@ export const register = async (req, res, next) => {
       username,
       email,
       password,
-      contactNumber,
-      gender,
-      department,
-      studyYear,
-      campus
+      dateOfBirth
     } = req.body
 
     const normalizedEmail = normalizeEmail(email)
     const normalizedUsername = normalizeUsername(username)
 
-    if (!fullName || !normalizedUsername || !normalizedEmail || !password) {
+    if (!fullName || !normalizedUsername || !normalizedEmail || !password || !dateOfBirth) {
       return res.status(400).json({
-        error: 'Full name, username, email and password are required.'
+        error: 'Full name, username, email, password and date of birth are required.'
       })
     }
+
+    const normalizedDateOfBirth = normalizeDateOfBirth(dateOfBirth)
+
+    if (!/^[a-z0-9_]{3,24}$/.test(normalizedUsername)) {
+      return res.status(400).json({ error: 'Username must be 3-24 characters using letters, numbers, or underscore.' })
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return res.status(400).json({ error: 'Enter a valid email address.' })
+    }
+
+    validatePassword(String(password || ''))
 
     const existingUser = await User.findOne({
       $or: [
@@ -100,11 +161,7 @@ export const register = async (req, res, next) => {
       username: normalizedUsername,
       email: normalizedEmail,
       password,
-      contactNumber: contactNumber || '',
-      gender: gender || '',
-      department: department || '',
-      studyYear: studyYear || '',
-      campus: campus || '',
+      dateOfBirth: normalizedDateOfBirth,
       avatarColor,
       role: 'user',
       status: 'active'

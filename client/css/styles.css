@@ -10943,22 +10943,22 @@ body {
   overflow-x: hidden !important;
 }
 
-/* When landing page is showing */
-body:has(#authView:not(.hidden)) {
+/* When the landing page is showing, but not the dedicated auth routes. */
+body:has(#authView:not(.hidden):not(.auth-route-mode)) {
   overflow-y: auto !important;
   height: auto !important;
   min-height: 100dvh !important;
   position: static !important;
 }
 
-body:has(#authView:not(.hidden)) .app-root {
+body:has(#authView:not(.hidden):not(.auth-route-mode)) .app-root {
   overflow: visible !important;
   height: auto !important;
   min-height: 100dvh !important;
 }
 
-body:has(#authView:not(.hidden)) #authView,
-body:has(#authView:not(.hidden)) .auth-view {
+body:has(#authView:not(.hidden):not(.auth-route-mode)) #authView,
+body:has(#authView:not(.hidden):not(.auth-route-mode)) .auth-view {
   overflow: visible !important;
   height: auto !important;
   min-height: 100dvh !important;
@@ -11011,8 +11011,8 @@ body:has(#chatView:not(.hidden)) .chat-feed {
     overflow: visible !important;
   }
 
-  #authView,
-  .auth-view {
+  body:has(#authView:not(.hidden):not(.auth-route-mode)) #authView,
+  body:has(#authView:not(.hidden):not(.auth-route-mode)) .auth-view {
     height: auto !important;
     min-height: 100dvh !important;
     overflow-y: auto !important;
@@ -11069,13 +11069,13 @@ body:has(#chatView:not(.hidden)) .chat-feed {
   }
 
   /* Hide the secondary nav CTA on small screens. */
-  body:has(#authView:not(.hidden)) .landing-nav .primary-btn.nav-cta,
+  body:has(#authView:not(.hidden):not(.auth-route-mode)) .landing-nav .primary-btn.nav-cta,
   .landing-nav .primary-btn.nav-cta {
     display: none !important;
   }
 
   /* Show only Login button. */
-  body:has(#authView:not(.hidden)) .landing-nav .ghost-btn.nav-cta,
+  body:has(#authView:not(.hidden):not(.auth-route-mode)) .landing-nav .ghost-btn.nav-cta,
   .landing-nav .ghost-btn.nav-cta {
     display: inline-flex !important;
     align-items: center !important;
@@ -11089,7 +11089,7 @@ body:has(#chatView:not(.hidden)) .chat-feed {
 }
 
 @media (max-width: 375px) {
-  body:has(#authView:not(.hidden)) .landing-nav button,
+  body:has(#authView:not(.hidden):not(.auth-route-mode)) .landing-nav button,
   .landing-nav .nav-cta {
     display: none !important;
   }

@@ -4,6 +4,7 @@ import { closeSocket } from "../lib/socket.js";
 
 const STORAGE_KEY = "anonchat-react-session";
 const GUEST_STORAGE_KEY = "anonchat-guest-session";
+const REGISTER_FIELDS = ["fullName", "username", "email", "password", "dateOfBirth"];
 const guestAnimals = ["Wolf", "Fox", "Bear", "Eagle", "Tiger", "Hawk", "Lion", "Panda", "Lynx", "Owl"];
 const guestColors = ["Blue", "Red", "Dark", "Gold", "Silver", "Neon", "Jade", "Rose", "Ash", "Storm"];
 const guestAvatarColors = {
@@ -82,6 +83,13 @@ function createGuestSession() {
   };
 }
 
+function normalizeRegisterPayload(payload = {}) {
+  return REGISTER_FIELDS.reduce((next, field) => {
+    next[field] = typeof payload[field] === "string" ? payload[field].trim() : payload[field] || "";
+    return next;
+  }, {});
+}
+
 const initialSession = loadSession() || loadGuestSession();
 
 function blockedIdsFromUser(user = {}) {
@@ -126,7 +134,7 @@ export const useAuthStore = create((set, get) => ({
   async register(payload) {
     set({ loading: true, error: "" });
     try {
-      const session = await api("/api/auth/register", { method: "POST", body: payload });
+      const session = await api("/api/auth/register", { method: "POST", body: normalizeRegisterPayload(payload) });
       saveSession(session);
       saveGuestSession(null);
       set({

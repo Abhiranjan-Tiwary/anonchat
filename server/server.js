@@ -864,12 +864,81 @@ app.post("/api/auth/logout", async (req, res) => {
   }
 });
 
-app.post("/api/auth/social/:provider", rateLimiters.auth, (req, res) => {
-  const provider = capitalize(req.params.provider);
+app.get("/api/auth/social/:provider/start", rateLimiters.auth, (req, res) => {
+  try {
+    const provider = normalizeSocialProvider(req.params.provider);
+    const config = socialProviderConfig(provider, req);
 
-  res.status(501).json({
-    error: `${provider} OAuth needs real client ID, client secret, and redirect URI setup before it can log users in.`,
-  });
+    if (!config.configured) {
+      sendSocialAuthPopupResult(res, {
+        ok: false,
+        error: `${capitalize(provider)} login needs ${config.requiredEnv.join(" and ")} in .env.`,
+        origin: socialClientOrigin(req),
+      });
+      return;
+    }
+
+    const authUrl = createSocialAuthUrl(provider, config, req.query || {}, req);
+    res.redirect(authUrl);
+  } catch (error) {
+    sendSocialAuthPopupResult(res, {
+      ok: false,
+      error: error.message || "Social login could not be started.",
+      origin: socialClientOrigin(req),
+    });
+  }
+});
+
+app.post("/api/auth/social/:provider", rateLimiters.auth, (req, res) => {
+  try {
+    const provider = normalizeSocialProvider(req.params.provider);
+    const config = socialProviderConfig(provider, req);
+    if (!config.configured) {
+      throw createHttpError(501, `${capitalize(provider)} login needs ${config.requiredEnv.join(" and ")} in .env.`);
+    }
+
+    res.json({
+      authUrl: createSocialAuthUrl(provider, config, req.body || {}, req),
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/auth/social/:provider/callback", rateLimiters.auth, async (req, res) => {
+  let statePayload = null;
+
+  try {
+    const provider = normalizeSocialProvider(req.params.provider);
+    const config = socialProviderConfig(provider, req);
+    const code = String(req.query.code || "").trim();
+    const oauthError = String(req.query.error_description || req.query.error || "").trim();
+
+    statePayload = verifySocialState(provider, req.query.state);
+
+    if (oauthError) throw createHttpError(400, oauthError);
+    if (!code) throw createHttpError(400, "Social login was cancelled.");
+    if (!config.configured) throw createHttpError(501, `${capitalize(provider)} login is not configured.`);
+
+    const profile = provider === "google"
+      ? await fetchGoogleProfile(code, config)
+      : await fetchFacebookProfile(code, config);
+    const userData = await loginSocialUser(provider, profile, statePayload);
+
+    setAuthCookie(res, userData.token);
+    runBackgroundTask(broadcastState, "Social auth state broadcast");
+    sendSocialAuthPopupResult(res, {
+      ok: true,
+      session: userData,
+      origin: statePayload.origin || socialClientOrigin(req),
+    });
+  } catch (error) {
+    sendSocialAuthPopupResult(res, {
+      ok: false,
+      error: error.message || "Social login failed.",
+      origin: statePayload?.origin || socialClientOrigin(req),
+    });
+  }
 });
 
 app.post("/api/auth/forgot-password", rateLimiters.reset, async (req, res) => {
@@ -1602,36 +1671,28 @@ app.delete("/api/admin/rooms/:roomId", async (req, res) => {
 
 async function registerUser(body) {
   const fullName = cleanText(body.fullName, 60);
-  const contactNumber = normalizeContact(body.contactNumber);
   const username = normalizeUsername(body.username);
   const email = normalizeEmail(body.email);
-  const campus = cleanText(body.campus || "Your College", 80);
-  const gender = normalizeGender(body.gender);
-  const department = cleanText(body.department || "", 60);
-  const studyYear = normalizeStudyYear(body.studyYear);
   const password = String(body.password || "");
+  const dateOfBirth = normalizeDateOfBirth(body.dateOfBirth);
 
   if (!fullName) throw createHttpError(400, "Full name is required.");
 
-  validateContact(contactNumber);
   validateUsername(username);
   validateEmail(email);
   validatePassword(password);
 
-  await ensureNotDeleted(username, email, contactNumber);
+  await ensureNotDeleted(username, email);
 
   const publicName = await generateAnonymousName();
+  const passwordSecret = hashPassword(password);
 
   const user = {
     id: createId("user"),
     fullName,
-    contactNumber,
     username,
     email,
-    campus,
-    gender,
-    department,
-    studyYear,
+    dateOfBirth,
     emailDomain: emailDomain(email),
     campusVerified: isCampusEmail(email),
     anonymousName: publicName,
@@ -1642,6 +1703,8 @@ async function registerUser(body) {
     status: "active",
     provider: "password",
     password,
+    passwordSalt: passwordSecret.salt,
+    passwordHash: passwordSecret.hash,
     createdAt: Date.now(),
     lastSeen: Date.now(),
   };
@@ -1650,7 +1713,7 @@ async function registerUser(body) {
     await db.collection("users").insertOne(user);
   } catch (error) {
     if (error.code === 11000) {
-      throw createHttpError(409, "Username, email, or contact number already exists.");
+      throw createHttpError(409, "Username or email already exists.");
     }
     throw error;
   }
@@ -1675,9 +1738,33 @@ async function loginUser(body) {
     throw createHttpError(404, "Username or email not found.");
   }
 
-  const passwordMatches = userDoc?.password
-    ? await userDoc.comparePassword(password)
-    : verifyPassword(password, user?.passwordSalt, user?.passwordHash);
+  let passwordMatches = Boolean(user?.passwordSalt && user?.passwordHash && verifyPassword(password, user.passwordSalt, user.passwordHash));
+
+  if (!passwordMatches && userDoc?.password) {
+    const storedPassword = String(userDoc.password || "");
+    const isBcryptHash = /^\$2[aby]\$\d{2}\$/.test(storedPassword);
+    passwordMatches = isBcryptHash
+      ? await userDoc.comparePassword(password)
+      : storedPassword === password;
+
+    if (passwordMatches && !isBcryptHash) {
+      const migratedSecret = hashPassword(password);
+      await db.collection("users").updateOne(
+        { id: user.id },
+        {
+          $set: {
+            password: "",
+            passwordSalt: migratedSecret.salt,
+            passwordHash: migratedSecret.hash,
+            lastSeen: Date.now(),
+          },
+        }
+      );
+      user.password = "";
+      user.passwordSalt = migratedSecret.salt;
+      user.passwordHash = migratedSecret.hash;
+    }
+  }
 
   if (!passwordMatches) {
     throw createHttpError(401, "Incorrect password.");
@@ -1703,6 +1790,407 @@ async function loginAdmin(body) {
   const token = await createSession("site-admin", "admin");
 
   return { user: adminUser(), token };
+}
+
+function normalizeSocialProvider(provider) {
+  const value = String(provider || "").trim().toLowerCase();
+  if (!["google", "facebook"].includes(value)) {
+    throw createHttpError(400, "Unsupported social login provider.");
+  }
+  return value;
+}
+
+function publicRequestOrigin(req) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
+  const protocol = forwardedProto || req.protocol || "http";
+  const host = forwardedHost || req.headers.host || `localhost:${PORT}`;
+  return `${protocol}://${host}`;
+}
+
+function isLocalOriginValue(origin) {
+  try {
+    const url = new URL(origin);
+    return ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function socialClientOrigin(req) {
+  const origin = String(req.headers.origin || "").trim();
+  const requestOrigin = publicRequestOrigin(req);
+
+  if (isLocalOriginValue(origin)) return origin;
+  if (isLocalOriginValue(requestOrigin)) {
+    const requestUrl = new URL(requestOrigin);
+    if (requestUrl.port === "5173") return requestOrigin;
+    return process.env.LOCAL_CLIENT_URL || "http://localhost:5173";
+  }
+
+  return process.env.CLIENT_URL || origin || requestOrigin;
+}
+
+function socialRedirectUri(provider, req) {
+  const explicit =
+    provider === "google"
+      ? process.env.GOOGLE_REDIRECT_URI
+      : process.env.FACEBOOK_REDIRECT_URI;
+  if (explicit) return explicit;
+
+  const apiOrigin = process.env.PUBLIC_API_URL || process.env.SERVER_URL || publicRequestOrigin(req);
+  return `${apiOrigin}/api/auth/social/${provider}/callback`;
+}
+
+function socialProviderConfig(provider, req) {
+  if (provider === "google") {
+    return {
+      provider,
+      clientId: process.env.GOOGLE_CLIENT_ID || "",
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
+      redirectUri: socialRedirectUri(provider, req),
+      configured: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+      requiredEnv: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
+    };
+  }
+
+  return {
+    provider,
+    clientId: process.env.FACEBOOK_APP_ID || process.env.FACEBOOK_CLIENT_ID || "",
+    clientSecret: process.env.FACEBOOK_APP_SECRET || process.env.FACEBOOK_CLIENT_SECRET || "",
+    redirectUri: socialRedirectUri(provider, req),
+    configured: Boolean(
+      (process.env.FACEBOOK_APP_ID || process.env.FACEBOOK_CLIENT_ID) &&
+        (process.env.FACEBOOK_APP_SECRET || process.env.FACEBOOK_CLIENT_SECRET)
+    ),
+    requiredEnv: ["FACEBOOK_APP_ID", "FACEBOOK_APP_SECRET"],
+  };
+}
+
+function createSocialAuthUrl(provider, config, input = {}, req) {
+  const mode = ["login", "register"].includes(String(input.mode || "").toLowerCase())
+    ? String(input.mode).toLowerCase()
+    : "login";
+  const rawDateOfBirth = String(input.dateOfBirth || "").trim();
+  const dateOfBirth = rawDateOfBirth ? formatDateOfBirth(normalizeDateOfBirth(rawDateOfBirth)) : "";
+
+  if (mode === "register" && !dateOfBirth) {
+    throw createHttpError(400, "Select date of birth before social signup.");
+  }
+
+  const state = jwt.sign(
+    {
+      type: "social-oauth",
+      provider,
+      mode,
+      dateOfBirth,
+      origin: socialClientOrigin(req),
+      nonce: crypto.randomBytes(12).toString("hex"),
+    },
+    JWT_SECRET,
+    { expiresIn: "10m" }
+  );
+
+  if (provider === "google") {
+    const params = new URLSearchParams({
+      client_id: config.clientId,
+      redirect_uri: config.redirectUri,
+      response_type: "code",
+      scope: "openid email profile",
+      state,
+      prompt: "select_account",
+    });
+    return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  }
+
+  const params = new URLSearchParams({
+    client_id: config.clientId,
+    redirect_uri: config.redirectUri,
+    response_type: "code",
+    scope: "email,public_profile",
+    state,
+  });
+  return `https://www.facebook.com/dialog/oauth?${params.toString()}`;
+}
+
+function verifySocialState(provider, rawState) {
+  const state = String(rawState || "").trim();
+  if (!state) throw createHttpError(400, "Missing social login state.");
+
+  let decoded;
+  try {
+    decoded = jwt.verify(state, JWT_SECRET);
+  } catch {
+    throw createHttpError(400, "Social login session expired. Please try again.");
+  }
+
+  if (decoded?.type !== "social-oauth" || decoded?.provider !== provider) {
+    throw createHttpError(400, "Invalid social login state.");
+  }
+
+  return decoded;
+}
+
+async function fetchGoogleProfile(code, config) {
+  const tokenPayload = await fetchFormJson("https://oauth2.googleapis.com/token", {
+    code,
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    redirect_uri: config.redirectUri,
+    grant_type: "authorization_code",
+  });
+
+  const accessToken = tokenPayload.access_token;
+  if (!accessToken) throw createHttpError(502, "Google did not return an access token.");
+
+  const profile = await fetchBearerJson("https://openidconnect.googleapis.com/v1/userinfo", accessToken);
+  return {
+    id: profile.sub,
+    email: profile.email,
+    emailVerified: Boolean(profile.email_verified),
+    name: profile.name,
+    avatarDataUrl: profile.picture,
+  };
+}
+
+async function fetchFacebookProfile(code, config) {
+  const tokenUrl = new URL("https://graph.facebook.com/oauth/access_token");
+  tokenUrl.search = new URLSearchParams({
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    redirect_uri: config.redirectUri,
+    code,
+  }).toString();
+
+  const tokenPayload = await fetchJsonUrl(tokenUrl.toString());
+  const accessToken = tokenPayload.access_token;
+  if (!accessToken) throw createHttpError(502, "Facebook did not return an access token.");
+
+  const profileUrl = new URL("https://graph.facebook.com/me");
+  profileUrl.search = new URLSearchParams({
+    fields: "id,name,email,picture.width(256).height(256)",
+    access_token: accessToken,
+  }).toString();
+
+  const profile = await fetchJsonUrl(profileUrl.toString());
+  return {
+    id: profile.id,
+    email: profile.email,
+    emailVerified: Boolean(profile.email),
+    name: profile.name,
+    avatarDataUrl: profile.picture?.data?.url || "",
+  };
+}
+
+async function loginSocialUser(provider, profile, statePayload = {}) {
+  const email = normalizeEmail(profile.email);
+  const providerId = cleanText(profile.id, 120);
+  if (!email) throw createHttpError(400, `${capitalize(provider)} did not provide an email address.`);
+  validateEmail(email);
+
+  const fullName = cleanText(profile.name || email.split("@")[0] || `${capitalize(provider)} User`, 60);
+  await ensureNotDeleted(`social_${provider}_${providerId || "user"}`, email);
+
+  const existingDoc = await models.User.findOne({
+    $or: [
+      { email },
+      ...(providerId ? [{ provider, providerId }] : []),
+    ],
+  }).select("+password +passwordSalt +passwordHash");
+
+  if (existingDoc) {
+    const existing = normalizeDocument(existingDoc.toObject({ versionKey: false }));
+    ensureActiveUser(existing);
+
+    const updates = {
+      lastSeen: Date.now(),
+      provider: existing.provider === "password" ? existing.provider : provider,
+      providerId: providerId || existing.providerId || "",
+    };
+
+    if (!existing.fullName && fullName) updates.fullName = fullName;
+    if (!existing.avatarDataUrl && profile.avatarDataUrl) updates.avatarDataUrl = cleanText(profile.avatarDataUrl, 1000);
+
+    await db.collection("users").updateOne({ id: existing.id }, { $set: updates });
+    const token = await createSession(existing.id, "user");
+    return { user: sanitizeUser({ ...existing, ...updates }), token };
+  }
+
+  if (statePayload.mode !== "register") {
+    throw createHttpError(404, `No account found for ${email}. Open Register and select date of birth first.`);
+  }
+
+  const dateOfBirth = normalizeDateOfBirth(statePayload.dateOfBirth);
+  const username = await generateSocialUsername(fullName, email);
+  const publicName = await generateAnonymousName();
+  const randomPassword = `${crypto.randomBytes(18).toString("base64url")}A1!`;
+  const passwordSecret = hashPassword(randomPassword);
+  const user = {
+    id: createId("user"),
+    fullName,
+    username,
+    email,
+    dateOfBirth,
+    emailDomain: emailDomain(email),
+    campusVerified: isCampusEmail(email) || Boolean(profile.emailVerified),
+    anonymousName: publicName,
+    about: "",
+    avatarColor: pick(avatarColors),
+    avatarDataUrl: cleanText(profile.avatarDataUrl, 1000),
+    role: "user",
+    status: "active",
+    provider,
+    providerId,
+    password: randomPassword,
+    passwordSalt: passwordSecret.salt,
+    passwordHash: passwordSecret.hash,
+    createdAt: Date.now(),
+    lastSeen: Date.now(),
+  };
+
+  try {
+    await db.collection("users").insertOne(user);
+  } catch (error) {
+    if (error.code === 11000) {
+      throw createHttpError(409, "A user with this email already exists. Try logging in.");
+    }
+    throw error;
+  }
+
+  const token = await createSession(user.id, "user");
+  return { user: sanitizeUser(user), token };
+}
+
+async function generateSocialUsername(fullName, email) {
+  const source = String(email || fullName || "user").split("@")[0] || "user";
+  const base = source
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 16) || "user";
+  const safeBase = base.length >= 3 ? base : `user_${base}`;
+
+  for (let index = 0; index < 30; index += 1) {
+    const suffix = index === 0 ? "" : `_${randomNumber(10, 9999)}`;
+    const candidate = `${safeBase}${suffix}`.slice(0, 24);
+    if (/^[a-z0-9_]{3,24}$/.test(candidate)) {
+      const exists = await db.collection("users").findOne({ username: candidate }, { projection: { id: 1 } });
+      if (!exists) return candidate;
+    }
+  }
+
+  return `user_${crypto.randomBytes(5).toString("hex")}`.slice(0, 24);
+}
+
+async function fetchFormJson(url, form) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(form).toString(),
+  });
+  return parseProviderResponse(response);
+}
+
+async function fetchBearerJson(url, token) {
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return parseProviderResponse(response);
+}
+
+async function fetchJsonUrl(url) {
+  const response = await fetch(url);
+  return parseProviderResponse(response);
+}
+
+async function parseProviderResponse(response) {
+  const text = await response.text();
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { error: text };
+  }
+
+  if (!response.ok) {
+    const message =
+      payload.error_description ||
+      payload.error?.message ||
+      payload.error ||
+      "Social provider request failed.";
+    throw createHttpError(response.status, message);
+  }
+
+  return payload;
+}
+
+function sendSocialAuthPopupResult(res, payload) {
+  const origin = payload.origin || "";
+  const safePayload = safeScriptJson({
+    type: "anonchat:social-auth",
+    ok: Boolean(payload.ok),
+    error: payload.error || "",
+    session: payload.session || null,
+  });
+  const safeOrigin = safeScriptJson(origin);
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AnonChat Social Login</title>
+  <style>
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0a0b14;color:#fff;font-family:system-ui,sans-serif}
+    main{width:min(420px,calc(100vw - 32px));padding:28px;border:1px solid rgba(255,255,255,.1);border-radius:16px;background:rgba(17,18,28,.9);text-align:center}
+    p{color:rgba(232,234,240,.72);line-height:1.5}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>AnonChat</h1>
+    <p id="message">${payload.ok ? "Login successful. Returning to AnonChat..." : escapeHtml(payload.error || "Social login failed.")}</p>
+  </main>
+  <script>
+    (function () {
+      var payload = ${safePayload};
+      var targetOrigin = ${safeOrigin} || window.location.origin;
+      try {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage(payload, targetOrigin);
+          window.setTimeout(function () { window.close(); }, 250);
+          return;
+        }
+      } catch (error) {}
+      if (payload.ok && payload.session) {
+        try { localStorage.setItem("anonchat-session-v4", JSON.stringify(payload.session)); } catch (error) {}
+        window.location.href = "/chat";
+        return;
+      }
+      document.getElementById("message").textContent = payload.error || "Social login failed.";
+    })();
+  </script>
+</body>
+</html>`);
+}
+
+function safeScriptJson(value) {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 async function requestPasswordReset(emailInput) {
@@ -3798,9 +4286,10 @@ function sanitizeUser(user) {
     username: user.username,
     email: user.email,
     fullName: user.fullName,
-    contactNumber: user.contactNumber,
-    campus: user.campus,
-    gender: user.gender,
+    dateOfBirth: formatDateOfBirth(user.dateOfBirth),
+    contactNumber: user.contactNumber || "",
+    campus: user.campus || "",
+    gender: user.gender || "",
     department: user.department || "",
     studyYear: user.studyYear || "",
     emailDomain: user.emailDomain || emailDomain(user.email),
@@ -3844,6 +4333,7 @@ function adminUser() {
     username: ADMIN_USERNAME,
     email: "",
     fullName: ADMIN_NAME,
+    dateOfBirth: "",
     contactNumber: "",
     campus: "Admin Console",
     gender: "",
@@ -3861,9 +4351,9 @@ function adminUser() {
   };
 }
 
-async function ensureNotDeleted(username, email, contactNumber) {
+async function ensureNotDeleted(username, email) {
   const blocked = await db.collection("deletedUsers").findOne({
-    $or: [{ username }, { email }, { contactNumber }],
+    $or: [{ username }, { email }],
   });
 
   if (blocked) {
@@ -3985,6 +4475,29 @@ function normalizeGender(gender) {
 function normalizeStudyYear(studyYear) {
   const value = String(studyYear || "").trim();
   return ["1", "2", "3", "4", "5", "alumni"].includes(value) ? value : "";
+}
+
+function normalizeDateOfBirth(value) {
+  const text = String(value || "").trim();
+  if (!text) throw createHttpError(400, "Date of birth is required.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw createHttpError(400, "Enter a valid date of birth.");
+
+  const date = new Date(`${text}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) {
+    throw createHttpError(400, "Enter a valid date of birth.");
+  }
+
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  if (date.getTime() > todayUtc) throw createHttpError(400, "Date of birth cannot be in the future.");
+
+  return date;
+}
+
+function formatDateOfBirth(value) {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
 }
 
 function emailDomain(email) {

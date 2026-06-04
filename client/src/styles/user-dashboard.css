@@ -1719,3 +1719,979 @@
     grid-column: 1 / -1;
   }
 }
+
+/* Instagram-style social migration layer */
+.ig-app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  background:
+    radial-gradient(circle at 10% 0%, rgba(168, 85, 247, 0.18), transparent 30%),
+    radial-gradient(circle at 90% 10%, rgba(236, 72, 153, 0.12), transparent 28%),
+    #050509;
+  color: #f8fafc;
+}
+
+.ig-sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 22px 16px;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(5, 5, 9, 0.82);
+  backdrop-filter: blur(22px);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  z-index: 20;
+}
+
+.ig-brand,
+.ig-profile-mini,
+.ig-nav-link,
+.ig-account-card,
+.ig-suggested-user,
+.ig-dm-row {
+  text-decoration: none;
+  color: inherit;
+}
+
+.ig-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 8px 18px;
+}
+
+.ig-brand-logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  object-fit: cover;
+  box-shadow: 0 14px 35px rgba(168, 85, 247, 0.28);
+}
+
+.ig-brand strong {
+  display: block;
+  font-size: 1.45rem;
+  letter-spacing: -0.04em;
+}
+
+.ig-brand small,
+.ig-profile-mini span,
+.ig-account-card span,
+.ig-suggested-user span,
+.ig-dm-row span,
+.ig-dm-title span,
+.ig-page-head p {
+  color: #a1a1aa;
+}
+
+.ig-nav {
+  display: grid;
+  gap: 8px;
+}
+
+.ig-nav-link {
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  color: #e5e7eb;
+  transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+  border: 1px solid transparent;
+}
+
+.ig-nav-link:hover,
+.ig-nav-link.active {
+  transform: translateX(4px);
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.ig-nav-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 1.1rem;
+  position: relative;
+}
+
+.ig-nav-icon.has-unread::after {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #ef4444;
+  position: absolute;
+  right: -2px;
+  top: -2px;
+  box-shadow: 0 0 0 3px #050509;
+}
+
+.ig-nav-link em {
+  margin-left: auto;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: #ef4444;
+  font-size: 0.72rem;
+  font-style: normal;
+}
+
+.ig-sidebar-footer {
+  margin-top: auto;
+  display: grid;
+  gap: 12px;
+}
+
+.ig-profile-mini,
+.ig-account-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ig-profile-mini div,
+.ig-account-card div,
+.ig-suggested-user div,
+.ig-dm-row div {
+  min-width: 0;
+}
+
+.ig-profile-mini strong,
+.ig-account-card strong,
+.ig-suggested-user strong,
+.ig-dm-row strong {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ig-logout-btn {
+  width: 100%;
+}
+
+.ig-main {
+  min-width: 0;
+  min-height: 100vh;
+}
+
+.ig-page {
+  width: min(1220px, 100%);
+  margin: 0 auto;
+  padding: 28px;
+}
+
+.ig-feed-page {
+  display: grid;
+  grid-template-columns: minmax(0, 680px) 350px;
+  gap: 34px;
+  align-items: start;
+}
+
+.ig-feed-column {
+  min-width: 0;
+  display: grid;
+  gap: 22px;
+}
+
+.ig-stories-row {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  padding: 16px;
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(18px);
+}
+
+.ig-story-card {
+  width: 78px;
+  flex: 0 0 78px;
+  border: 0;
+  background: transparent;
+  color: #f8fafc;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  cursor: pointer;
+  position: relative;
+}
+
+.ig-story-card span:last-child {
+  max-width: 74px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.ig-story-ring {
+  padding: 3px;
+  border-radius: 999px;
+  background: conic-gradient(from 20deg, #f97316, var(--story-color), #ec4899, #f97316);
+}
+
+.ig-story-card-own em {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  position: absolute;
+  right: 12px;
+  top: 38px;
+  background: #3b82f6;
+  color: white;
+  border: 2px solid #09090f;
+  font-style: normal;
+}
+
+.ig-feed-list {
+  display: grid;
+  gap: 24px;
+}
+
+.ig-post-card,
+.ig-suggested-card,
+.ig-mini-stats,
+.ig-result-card,
+.ig-create-card,
+.ig-activity-card,
+.ig-profile-hero,
+.ig-dm-sidebar,
+.ig-dm-window {
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.075);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(20px);
+}
+
+.ig-post-card {
+  overflow: hidden;
+}
+
+.ig-post-head,
+.ig-dm-window header,
+.ig-section-title,
+.ig-dm-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.ig-post-head {
+  padding: 14px 16px;
+}
+
+.ig-post-head > div,
+.ig-dm-window header > div,
+.ig-account-card,
+.ig-suggested-user,
+.ig-dm-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ig-post-head button,
+.ig-post-actions button,
+.ig-activity-tabs button,
+.ig-reel-content button,
+.ig-reel-nav,
+.ig-dm-title a {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ig-post-media {
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+  font-size: clamp(2rem, 6vw, 4.5rem);
+  font-weight: 900;
+  letter-spacing: -0.08em;
+  text-align: center;
+}
+
+.ig-post-actions {
+  display: grid;
+  grid-template-columns: 44px 44px 44px 1fr;
+  gap: 4px;
+  padding: 12px 14px 4px;
+}
+
+.ig-post-actions button {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  font-size: 1.45rem;
+}
+
+.ig-post-actions button:last-child {
+  justify-self: end;
+}
+
+.ig-post-actions button:hover,
+.ig-post-actions button.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fb7185;
+}
+
+.ig-post-copy {
+  padding: 0 16px 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.ig-post-copy p {
+  margin: 0;
+  color: #e5e7eb;
+  line-height: 1.55;
+}
+
+.ig-post-copy button {
+  width: max-content;
+  border: 0;
+  background: transparent;
+  color: #a1a1aa;
+  padding: 0;
+  cursor: pointer;
+}
+
+.ig-post-copy input,
+.ig-search-box input,
+.ig-create-card textarea,
+.ig-dm-composer input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  color: #f8fafc;
+  background: transparent;
+}
+
+.ig-post-copy input {
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ig-right-panel {
+  position: sticky;
+  top: 28px;
+  display: grid;
+  gap: 18px;
+}
+
+.ig-account-card a,
+.ig-section-title a,
+.ig-dm-window header a {
+  margin-left: auto;
+  color: #60a5fa;
+  text-decoration: none;
+  font-weight: 800;
+}
+
+.ig-mini-stats {
+  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  text-align: center;
+  gap: 10px;
+}
+
+.ig-mini-stats div {
+  display: grid;
+  gap: 4px;
+}
+
+.ig-mini-stats strong {
+  font-size: 1.3rem;
+}
+
+.ig-mini-stats span {
+  color: #a1a1aa;
+  font-size: 0.8rem;
+}
+
+.ig-suggested-card,
+.ig-result-card {
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.ig-suggested-user,
+.ig-dm-row {
+  padding: 10px;
+  border-radius: 18px;
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+
+.ig-suggested-user:hover,
+.ig-dm-row:hover {
+  background: rgba(255, 255, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.ig-suggested-user em {
+  margin-left: auto;
+  color: #60a5fa;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.ig-room-dot {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: white;
+  font-weight: 900;
+}
+
+.ig-room-dot.large {
+  width: 54px;
+  height: 54px;
+  border-radius: 18px;
+}
+
+.ig-single-column-page {
+  max-width: 980px;
+  display: grid;
+  gap: 20px;
+}
+
+.ig-page-head h1 {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  letter-spacing: -0.07em;
+}
+
+.ig-page-head p {
+  margin: 8px 0 0;
+}
+
+.ig-search-box {
+  min-height: 60px;
+  padding: 0 18px;
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.ig-muted-text {
+  color: #a1a1aa;
+  margin: 0;
+}
+
+.ig-explore-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-auto-rows: 180px;
+  gap: 6px;
+}
+
+.ig-explore-tile {
+  border-radius: 22px;
+  display: grid;
+  place-items: end start;
+  padding: 18px;
+  min-height: 0;
+  background: linear-gradient(135deg, rgba(236, 72, 153, 0.85), rgba(99, 102, 241, 0.82), rgba(15, 23, 42, 0.9));
+  font-weight: 900;
+}
+
+.ig-explore-tile.large {
+  grid-row: span 2;
+}
+
+.ig-reels-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  gap: 12px;
+}
+
+.ig-reel-phone {
+  width: min(430px, 92vw);
+  height: min(760px, 78vh);
+  border-radius: 38px;
+  overflow: hidden;
+  position: relative;
+  background: linear-gradient(150deg, #f97316, #ec4899 42%, #111827 100%);
+  box-shadow: 0 35px 100px rgba(0, 0, 0, 0.45);
+}
+
+.ig-reel-progress {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 14px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.3);
+  overflow: hidden;
+}
+
+.ig-reel-progress span {
+  display: block;
+  height: 100%;
+  background: white;
+}
+
+.ig-reel-content {
+  position: absolute;
+  inset: auto 0 0;
+  padding: 24px;
+  display: grid;
+  grid-template-columns: 1fr 64px;
+  gap: 18px;
+  align-items: end;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.62));
+}
+
+.ig-reel-content strong {
+  display: block;
+  font-size: 1.4rem;
+}
+
+.ig-reel-content aside {
+  display: grid;
+  gap: 16px;
+}
+
+.ig-reel-content button {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  font-size: 1.5rem;
+}
+
+.ig-reel-content button span {
+  font-size: 0.75rem;
+}
+
+.ig-reel-nav {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 1.5rem;
+}
+
+.ig-messages-page {
+  width: 100%;
+  max-width: none;
+  height: 100vh;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+}
+
+.ig-dm-sidebar,
+.ig-dm-window {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.ig-dm-sidebar {
+  border-left: 0;
+  border-top: 0;
+  border-bottom: 0;
+  padding: 22px;
+  overflow-y: auto;
+}
+
+.ig-dm-title {
+  margin-bottom: 16px;
+}
+
+.ig-dm-title strong {
+  font-size: 1.35rem;
+}
+
+.ig-dm-search {
+  min-height: 44px;
+  border-radius: 16px;
+  padding: 12px 14px;
+  color: #71717a;
+  background: rgba(255, 255, 255, 0.08);
+  margin-bottom: 14px;
+}
+
+.ig-dm-list {
+  display: grid;
+  gap: 6px;
+}
+
+.ig-dm-row em {
+  margin-left: auto;
+  color: #a1a1aa;
+  font-style: normal;
+}
+
+.ig-dm-window {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+.ig-dm-window header {
+  padding: 18px 22px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ig-dm-preview {
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.ig-dm-preview p {
+  max-width: min(420px, 80%);
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.ig-dm-preview .outgoing {
+  align-self: flex-end;
+  background: #2563eb;
+}
+
+.ig-dm-composer {
+  margin: 18px;
+  min-height: 54px;
+  padding: 0 16px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.ig-empty-state {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  text-align: center;
+  color: #a1a1aa;
+}
+
+.ig-create-card {
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+}
+
+.ig-upload-zone {
+  min-height: 360px;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #e5e7eb;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.ig-upload-zone img {
+  width: 100%;
+  height: 100%;
+  max-height: 520px;
+  object-fit: contain;
+}
+
+.ig-create-card textarea {
+  resize: vertical;
+  min-height: 120px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ig-profile-page {
+  max-width: 1040px;
+  display: grid;
+  gap: 20px;
+}
+
+.ig-profile-hero {
+  padding: 28px;
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  gap: 28px;
+  align-items: center;
+}
+
+.ig-profile-avatar-xl .avatar {
+  width: 150px;
+  height: 150px;
+  font-size: 2.8rem;
+}
+
+.ig-profile-summary h1 {
+  margin: 0;
+  font-size: 2rem;
+}
+
+.ig-profile-summary > div:first-child,
+.ig-profile-stats {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.ig-profile-stats {
+  margin: 18px 0;
+}
+
+.ig-profile-summary p {
+  color: #d4d4d8;
+  margin: 0;
+}
+
+.ig-profile-grid-preview {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.ig-profile-grid-preview div {
+  aspect-ratio: 1;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.28), rgba(236, 72, 153, 0.18));
+  display: grid;
+  place-items: center;
+  color: #a1a1aa;
+  font-weight: 800;
+}
+
+.ig-notifications-page {
+  max-width: 860px;
+}
+
+.ig-activity-card {
+  padding: 18px;
+}
+
+.ig-activity-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.ig-activity-tabs button {
+  padding: 9px 14px;
+  border-radius: 999px;
+  color: #e5e7eb;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ig-activity-tabs button.active {
+  background: white;
+  color: #09090f;
+}
+
+.ig-activity-row {
+  display: grid !important;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+
+@media (max-width: 1100px) {
+  .ig-app-shell {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .ig-brand div,
+  .ig-nav-link strong,
+  .ig-nav-link em,
+  .ig-profile-mini div,
+  .ig-logout-btn span {
+    display: none;
+  }
+
+  .ig-nav-link {
+    justify-content: center;
+  }
+
+  .ig-feed-page {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ig-right-panel {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .ig-app-shell {
+    display: block;
+    padding-bottom: 76px;
+  }
+
+  .ig-sidebar {
+    position: fixed;
+    inset: auto 0 0;
+    height: 74px;
+    padding: 8px 10px;
+    border-right: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .ig-brand,
+  .ig-sidebar-footer {
+    display: none;
+  }
+
+  .ig-nav {
+    height: 100%;
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .ig-nav-link {
+    min-height: 52px;
+    width: 48px;
+    padding: 0;
+    border-radius: 16px;
+    transform: none !important;
+  }
+
+  .ig-nav-link:nth-child(2),
+  .ig-nav-link:nth-child(3),
+  .ig-nav-link:nth-child(7) {
+    display: none;
+  }
+
+  .ig-page {
+    padding: 16px;
+  }
+
+  .ig-stories-row {
+    border-radius: 22px;
+  }
+
+  .ig-post-card,
+  .ig-suggested-card,
+  .ig-mini-stats,
+  .ig-result-card,
+  .ig-create-card,
+  .ig-activity-card,
+  .ig-profile-hero {
+    border-radius: 22px;
+  }
+
+  .ig-messages-page {
+    height: calc(100vh - 76px);
+    grid-template-columns: 1fr;
+  }
+
+  .ig-dm-window {
+    display: none;
+  }
+
+  .ig-profile-hero {
+    grid-template-columns: 1fr;
+    text-align: center;
+  }
+
+  .ig-profile-summary > div:first-child,
+  .ig-profile-stats {
+    justify-content: center;
+  }
+
+  .ig-explore-grid {
+    grid-template-columns: repeat(2, 1fr);
+    grid-auto-rows: 140px;
+  }
+}
+
+/* Desktop layout correction: full web app, not phone-frame style */
+.ig-app-shell {
+  width: 100%;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.ig-main {
+  width: 100%;
+  overflow-x: hidden;
+}
+
+.ig-page {
+  width: min(100% - 48px, 1320px);
+  max-width: 1320px;
+  margin-inline: auto;
+  padding: 32px 0;
+}
+
+.ig-feed-page {
+  grid-template-columns: minmax(540px, 720px) minmax(280px, 360px);
+  justify-content: center;
+}
+
+.ig-single-column-page,
+.ig-notifications-page,
+.ig-profile-page,
+.ig-messages-page {
+  width: min(100% - 48px, 1180px);
+}
+
+.ig-post-card,
+.ig-stories-row,
+.ig-suggested-card,
+.ig-mini-stats,
+.ig-create-card,
+.ig-activity-card,
+.ig-profile-hero,
+.ig-result-card {
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
+}
+
+@media (max-width: 760px) {
+  .ig-page,
+  .ig-single-column-page,
+  .ig-notifications-page,
+  .ig-profile-page,
+  .ig-messages-page {
+    width: min(100% - 24px, 1320px);
+    padding: 16px 0;
+  }
+}

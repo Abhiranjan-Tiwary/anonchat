@@ -9,6 +9,11 @@ import Room from "./pages/app/Room.jsx";
 import Profile from "./pages/app/Profile.jsx";
 import Settings from "./pages/app/Settings.jsx";
 import Notifications from "./pages/app/Notifications.jsx";
+import Search from "./pages/app/Search.jsx";
+import Explore from "./pages/app/Explore.jsx";
+import Reels from "./pages/app/Reels.jsx";
+import Messages from "./pages/app/Messages.jsx";
+import CreatePost from "./pages/app/CreatePost.jsx";
 import NotFound from "./pages/app/NotFound.jsx";
 import AdminDashboard from "./pages/admin/Dashboard.jsx";
 import AdminUsers from "./pages/admin/Users.jsx";
@@ -55,12 +60,17 @@ export default function App() {
         <Route path="/signup" element={<GuestOnly><Login initialMode="register" /></GuestOnly>} />
         <Route path="/dashboard" element={<RequireAuth><AppLayout /></RequireAuth>}>
           <Route index element={<Home />} />
+          <Route path="search" element={<Search />} />
+          <Route path="explore" element={<Explore />} />
+          <Route path="reels" element={<Reels />} />
+          <Route path="messages" element={<Messages />} />
+          <Route path="create" element={<CreatePost />} />
           <Route path="rooms/:roomId" element={<Room />} />
           <Route path="profile" element={<Profile />} />
           <Route path="settings" element={<Settings />} />
           <Route path="notifications" element={<Notifications />} />
         </Route>
-        <Route path="/chat" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/chat" element={<Navigate to="/dashboard/messages" replace />} />
         <Route path="/admin" element={<RequireAdmin><AdminLayout /></RequireAdmin>}>
           <Route index element={<Navigate to="/admin/dashboard" replace />} />
           <Route path="dashboard" element={<AdminDashboard />} />

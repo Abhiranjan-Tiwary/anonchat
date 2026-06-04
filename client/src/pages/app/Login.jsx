@@ -8,15 +8,10 @@ import "../../styles/login.css";
 const emptyForm = {
   identifier: "",
   fullName: "",
-  contactNumber: "",
   username: "",
   email: "",
   password: "",
-  confirmPassword: "",
-  gender: "prefer-not",
-  department: "",
-  studyYear: "1",
-  campus: "Quantum University",
+  dateOfBirth: "",
 };
 
 const modeCopy = {
@@ -47,17 +42,32 @@ const modeCopy = {
 };
 
 const registerFields = [
-  ["fullName", "Full Name", "text", "Your full name", "✦"],
-  ["contactNumber", "Contact Number", "tel", "Phone number", "☎"],
-  ["username", "Username", "text", "Choose a username", "@"],
-  ["email", "Email", "email", "student@college.edu", "✉"],
-  ["password", "Password", "password", "Create a password", "🔑"],
-  ["confirmPassword", "Confirm Password", "password", "Repeat your password", "🔑"],
-  ["department", "Department", "text", "CSE", "⌘"],
+  ["fullName", "Full Name *", "text", "Your full name", "✦"],
+  ["username", "Username *", "text", "Choose a username", "@"],
+  ["email", "Email *", "email", "student@college.edu", "✉"],
+  ["password", "Password *", "password", "Create a password", "🔑"],
+  ["dateOfBirth", "Date of Birth *", "date", "", "#"],
 ];
 
 function validateEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function validateDateOfBirth(value) {
+  const text = String(value || "").trim();
+  if (!text) return "Date of birth is required.";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return "Enter a valid date of birth.";
+
+  const date = new Date(`${text}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) {
+    return "Enter a valid date of birth.";
+  }
+
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  if (date.getTime() > todayUtc) return "Date of birth cannot be in the future.";
+
+  return "";
 }
 
 export default function Login({ initialMode = "login" }) {
@@ -66,7 +76,6 @@ export default function Login({ initialMode = "login" }) {
   const [fieldErrors, setFieldErrors] = useState({});
   const [formError, setFormError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetStep, setResetStep] = useState("email");
   const [resetForm, setResetForm] = useState({ email: "", otp: "", resetToken: "", password: "" });
@@ -122,11 +131,11 @@ export default function Login({ initialMode = "login" }) {
 
     if (mode === "register") {
       if (!form.fullName.trim()) errors.fullName = "Full name is required.";
-      if (!form.contactNumber.trim()) errors.contactNumber = "Contact number is required.";
       if (!/^[A-Za-z0-9_]{3,24}$/.test(form.username.trim())) errors.username = "Use 3-24 letters, numbers, or underscore.";
       if (!validateEmail(form.email.trim())) errors.email = "Enter a valid email address.";
       if (!/^[A-Za-z0-9!@#$%^&*_\-+=.?]{8,64}$/.test(form.password)) errors.password = "Use 8-64 characters with the allowed password symbols.";
-      if (form.confirmPassword !== form.password) errors.confirmPassword = "Passwords do not match.";
+      const dateOfBirthError = validateDateOfBirth(form.dateOfBirth);
+      if (dateOfBirthError) errors.dateOfBirth = dateOfBirthError;
     }
 
     setFieldErrors(errors);
@@ -148,14 +157,10 @@ export default function Login({ initialMode = "login" }) {
       if (mode === "register") {
         await register({
           fullName: form.fullName,
-          contactNumber: form.contactNumber,
           username: form.username,
           email: form.email,
           password: form.password,
-          campus: form.campus,
-          gender: form.gender,
-          department: form.department,
-          studyYear: form.studyYear,
+          dateOfBirth: form.dateOfBirth,
         });
         toast("Account created.", "success");
         navigate("/chat", { replace: true });
@@ -318,8 +323,8 @@ export default function Login({ initialMode = "login" }) {
         </div>
       </section>
 
-      <section className="auth-card-panel">
-        <form className="premium-auth-card" onSubmit={submit} noValidate>
+      <section className={`auth-card-panel auth-card-panel-${mode}`}>
+        <form className={`premium-auth-card mode-${mode}`} onSubmit={submit} noValidate>
           <div className="auth-tabs" role="tablist" aria-label="Auth mode">
             {["login", "register", "admin"].map((tab) => (
               <button
@@ -359,33 +364,24 @@ export default function Login({ initialMode = "login" }) {
                 icon={icon}
                 value={form[name]}
                 error={fieldErrors[name]}
-                showPassword={name === "confirmPassword" ? showConfirm : showPassword}
-                onTogglePassword={name === "confirmPassword" ? () => setShowConfirm((value) => !value) : () => setShowPassword((value) => !value)}
+                autoComplete={
+                  name === "dateOfBirth"
+                    ? "bday"
+                    : name === "email"
+                      ? "email"
+                      : name === "identifier"
+                        ? "username"
+                        : type === "password"
+                          ? mode === "register"
+                            ? "new-password"
+                            : "current-password"
+                          : "off"
+                }
+                showPassword={showPassword}
+                onTogglePassword={() => setShowPassword((value) => !value)}
                 onChange={(value) => patch(name, value)}
               />
             ))}
-
-            {mode === "register" ? (
-              <>
-                <SelectField name="gender" label="Gender" icon="◌" value={form.gender} onChange={(value) => patch("gender", value)}>
-                  <option value="prefer-not">Prefer not to say</option>
-                  <option value="female">Female</option>
-                  <option value="male">Male</option>
-                  <option value="other">Other</option>
-                </SelectField>
-                <SelectField name="studyYear" label="Study Year" icon="#" value={form.studyYear} onChange={(value) => patch("studyYear", value)}>
-                  <option value="1">1st year</option>
-                  <option value="2">2nd year</option>
-                  <option value="3">3rd year</option>
-                  <option value="4">4th year</option>
-                </SelectField>
-                <SelectField name="campus" label="Campus" icon="⌂" value={form.campus} onChange={(value) => patch("campus", value)}>
-                  <option value="Quantum University">Quantum University</option>
-                  <option value="Your College">Your College</option>
-                  <option value="Campus Community">Campus Community</option>
-                </SelectField>
-              </>
-            ) : null}
           </div>
 
           {mode === "login" ? (
@@ -544,7 +540,7 @@ function AuthFeature({ icon, title, text, tone }) {
   );
 }
 
-function AuthField({ name, label, type, placeholder, icon, value, error, showPassword, onTogglePassword, onChange }) {
+function AuthField({ name, label, type, placeholder, icon, value, error, autoComplete, showPassword, onTogglePassword, onChange }) {
   const isPassword = type === "password";
 
   return (
@@ -557,24 +553,12 @@ function AuthField({ name, label, type, placeholder, icon, value, error, showPas
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        autoComplete={isPassword ? "current-password" : name === "email" ? "email" : "off"}
+        autoComplete={autoComplete || (isPassword ? "current-password" : name === "email" ? "email" : "off")}
       />
       {isPassword ? (
         <button type="button" onClick={onTogglePassword}>{showPassword ? "Hide" : "Show"}</button>
       ) : null}
       {error ? <em>{error}</em> : null}
-    </label>
-  );
-}
-
-function SelectField({ name, label, icon, value, onChange, children }) {
-  return (
-    <label className="premium-field" htmlFor={name}>
-      <span>{label}</span>
-      <i>{icon}</i>
-      <select id={name} value={value} onChange={(event) => onChange(event.target.value)}>
-        {children}
-      </select>
     </label>
   );
 }

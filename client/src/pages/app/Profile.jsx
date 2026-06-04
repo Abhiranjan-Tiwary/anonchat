@@ -19,8 +19,8 @@ export default function Profile() {
 
   if (user?.isGuest) {
     return (
-      <div className="workspace-page">
-        <CardHeader title="Profile" subtitle="Profile photos and saved account details need a free AnonChat account." />
+      <div className="workspace-page ig-profile-page">
+        <CardHeader title="Profile" subtitle="Profile photos, bio and social details need a free AnonChat account." />
         <GuestUpgradeBanner />
       </div>
     );
@@ -73,8 +73,26 @@ export default function Profile() {
   }
 
   return (
-    <div className="workspace-page">
-      <CardHeader title="Profile" subtitle="Your display name and photo appear on chat messages." />
+    <div className="workspace-page ig-profile-page">
+      <CardHeader title="Profile" subtitle="Your social profile, avatar, bio and public identity." />
+      <section className="ig-profile-hero">
+        <div className="ig-profile-avatar-xl">
+          <Avatar name={profile.displayName || "Anonymous"} src={profile.avatarDataUrl} />
+        </div>
+        <div className="ig-profile-summary">
+          <div>
+            <h1>{profile.displayName || "Anonymous User"}</h1>
+            <Button variant="ghost" size="sm" onClick={openFilePicker}>Edit photo</Button>
+          </div>
+          <div className="ig-profile-stats">
+            <span><strong>0</strong> posts</span>
+            <span><strong>0</strong> followers</span>
+            <span><strong>0</strong> following</span>
+          </div>
+          <p>{profile.bio || "No bio yet. Add a short intro so people know your vibe."}</p>
+        </div>
+      </section>
+
       <Card className="profile-editor">
         <div className="profile-photo-block">
           <button className="profile-avatar-button" type="button" onClick={openFilePicker} aria-label="Change profile photo">
@@ -121,6 +139,12 @@ export default function Profile() {
 
         <Button className="profile-save-btn" loading={loading} onClick={saveProfile}>Save Profile</Button>
       </Card>
+
+      <section className="ig-profile-grid-preview">
+        {Array.from({ length: 9 }, (_, index) => (
+          <div key={index}><span>{index === 0 ? "Your first post" : "+"}</span></div>
+        ))}
+      </section>
 
       {cropSource ? (
         <CropModal

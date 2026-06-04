@@ -74,3 +74,20 @@
     grid-template-columns: auto auto !important;
   }
 }
+
+/* Keep landing links visible on tablet/desktop after this late-loading fix file. */
+@media (min-width: 769px) {
+  .landing-links {
+    display: flex !important;
+  }
+
+  .landing-nav {
+    grid-template-columns: auto minmax(0, 1fr) auto !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .landing-links {
+    display: none !important;
+  }
+}

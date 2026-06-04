@@ -1,13 +1,13 @@
-const CACHE_NAME = "anonchat-shell-v11";
+const CACHE_NAME = "anonchat-shell-v13-social-oauth";
 const SHELL_ASSETS = [
   "/",
   "/offline.html",
   "/manifest.webmanifest",
-  "/css/styles.css?v=stable-v3",
-  "/css/landing-nav-fix.css?v=stable-v3",
-  "/css/auth-page-fix.css?v=stable-v3",
-  "/css/user-chat-room-fix.css?v=stable-v3",
-  "/js/app.js?v=auth-fix-20260522-2",
+  "/css/styles.css?v=social-oauth-20260604",
+  "/css/landing-nav-fix.css?v=social-oauth-20260604",
+  "/css/auth-page-fix.css?v=social-oauth-20260604",
+  "/css/user-chat-room-fix.css?v=social-oauth-20260604",
+  "/js/app.js?v=social-oauth-20260604",
   "/assets/logo/logo.png",
   "/assets/anonchat-preview.png"
 ];

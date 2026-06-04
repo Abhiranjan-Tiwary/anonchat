@@ -32,6 +32,26 @@ const userSchema = new mongoose.Schema({
     minlength: 8,
     select: false
   },
+  dateOfBirth: {
+    type: Date,
+    required: [
+      function() {
+        return this.isNew && (this.role === 'user' || this.role === 'student')
+      },
+      'Date of birth is required'
+    ],
+    validate: {
+      validator(value) {
+        if (!value) return this.role !== 'user' && this.role !== 'student'
+        const date = value instanceof Date ? value : new Date(value)
+        if (Number.isNaN(date.getTime())) return false
+        const today = new Date()
+        const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+        return date.getTime() <= todayUtc
+      },
+      message: 'Date of birth cannot be in the future'
+    }
+  },
   contactNumber: {
     type: String,
     trim: true,
@@ -187,6 +207,12 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true,
     default: 'password'
+  },
+  providerId: {
+    type: String,
+    trim: true,
+    default: '',
+    index: true
   },
   passwordSalt: {
     type: String,

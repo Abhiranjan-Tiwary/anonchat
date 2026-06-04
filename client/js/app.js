@@ -1,9 +1,6 @@
 const SESSION_KEY = "anonchat-session-v4";
 const ROOM_KEY = "anonchat-active-room-v4";
-const API_BASE =
-  window.location.origin && window.location.origin !== "null"
-    ? window.location.origin
-    : "http://localhost:3000";
+const API_BASE = "";
 const LANDING_ROUTE = "/";
 const LOGIN_ROUTE = "/login";
 const SIGNUP_ROUTE = "/signup";
@@ -209,6 +206,7 @@ let state = {
 let selectedReportMessageId = null;
 let activePanel = "pulse";
 let socket = null;
+let socketClientLoadPromise = null;
 let joinedRoomId = null;
 let typingTimer = null;
 let typingRequestTimer = null;
@@ -312,7 +310,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   applyThemeChoice(loadInitialThemeChoice(), { persist: false, transition: false });
   updateConnectionStatusUi();
   initThemeSystem();
-  bindEvents();
+  bindGlobalClickFallbacks();
+  bindSocialAuthListener();
+  try {
+    bindEvents();
+  } catch (error) {
+    console.error("Some click handlers could not be bound:", error);
+  }
   initPwaExperience();
   syncAuthModeFromRoute();
   renderAuthShell();
@@ -354,19 +358,16 @@ function cacheElements() {
   elements.loginIdentifierInput = document.querySelector("#loginIdentifierInput");
   elements.adminUsernameInput = document.querySelector("#adminUsernameInput");
   elements.fullNameInput = document.querySelector("#fullNameInput");
-  elements.contactInput = document.querySelector("#contactInput");
   elements.usernameInput = document.querySelector("#usernameInput");
   elements.emailInput = document.querySelector("#emailInput");
-  elements.genderSelect = document.querySelector("#genderSelect");
-  elements.departmentInput = document.querySelector("#departmentInput");
-  elements.studyYearSelect = document.querySelector("#studyYearSelect");
   elements.passwordInput = document.querySelector("#passwordInput");
-  elements.confirmPasswordInput = document.querySelector("#confirmPasswordInput");
+  elements.passwordLabel = document.querySelector("#passwordLabel");
+  elements.dateOfBirthInput = document.querySelector("#dateOfBirthInput");
   elements.passwordToggleButtons = document.querySelectorAll("[data-password-toggle]");
-  elements.campusSelect = document.querySelector("#campusSelect");
   elements.campusName = document.querySelector("#campusName");
   elements.sidebarMenu = document.querySelector("#sidebarMenu");
   elements.roomList = document.querySelector("#roomList");
+  elements.sidebarDmList = document.querySelector("#sidebarDmList");
   elements.roomSearch = document.querySelector("#roomSearch");
   elements.messageSearch = document.querySelector("#messageSearch");
   elements.chatRoomTitle = document.querySelector("#chatRoomTitle");
@@ -542,7 +543,9 @@ function cacheElements() {
 
 function bindEvents() {
   elements.authTabs.forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       openAuthRoute(button.dataset.authMode);
     });
   });
@@ -577,6 +580,10 @@ function bindEvents() {
   });
 elements.roomSearch?.addEventListener("input", renderRooms);
 elements.sidebarMenu?.addEventListener("click", handleDashboardMenuClick);
+elements.sidebar?.addEventListener("click", (event) => {
+  if (!event.target.closest(".sidebar-section-title [data-menu-action]")) return;
+  handleDashboardMenuClick(event);
+});
 
 elements.messageSearch.addEventListener("input", () => {
   state.messageSearchQuery = elements.messageSearch.value.trim().toLowerCase();
@@ -725,6 +732,13 @@ window.addEventListener("beforeunload", () => {
     if (getChatContextItem(event.target)) return;
 
     handleJoinRoom(roomButton.dataset.roomId);
+    closeMobileSidebar();
+  });
+
+  elements.sidebarDmList?.addEventListener("click", (event) => {
+    const profileTrigger = event.target.closest("[data-profile-author-id]");
+    if (!profileTrigger) return;
+    openUserProfileFromTrigger(profileTrigger);
     closeMobileSidebar();
   });
 
@@ -934,7 +948,11 @@ function isAuthRoute(route = state.route) {
 function setAuthRouteScroll(enabled) {
   document.documentElement.classList.toggle("auth-route-scroll", enabled);
   document.body.classList.toggle("auth-route-scroll", enabled);
-  if (enabled) document.body.style.overflow = "";
+  if (enabled) {
+    document.documentElement.style.overflow = "";
+    document.body.style.overflow = "";
+    document.body.classList.remove("mobile-nav-open", "mobile-app-menu-open", "no-scroll");
+  }
 }
 
 function primeAuthRouteScroll() {
@@ -1077,18 +1095,20 @@ function updateAuthMode(mode) {
   elements.socialRow.classList.toggle("hidden", isAdmin);
   elements.authDivider.classList.toggle("hidden", isAdmin);
   elements.authSubmitButton.textContent = isRegister
-    ? "Create My Account ->"
+    ? "Create Account"
     : isAdmin
-      ? "Open Admin Console ->"
-      : "Login to AnonChat ->";
+      ? "Open Admin"
+      : "Login";
   elements.loginIdentifierInput.required = isLogin;
   elements.adminUsernameInput.required = isAdmin;
   elements.fullNameInput.required = isRegister;
-  elements.contactInput.required = isRegister;
   elements.usernameInput.required = isRegister;
   elements.emailInput.required = isRegister;
-  elements.genderSelect.required = false;
-  elements.confirmPasswordInput.required = isRegister;
+  elements.dateOfBirthInput.required = isRegister;
+  elements.dateOfBirthInput.max = new Date().toISOString().slice(0, 10);
+  if (elements.passwordLabel) {
+    elements.passwordLabel.textContent = isRegister ? "Password *" : "Password";
+  }
   elements.passwordInput.autocomplete = isRegister ? "new-password" : "current-password";
   elements.passwordInput.placeholder = isRegister ? "Minimum 8 characters" : "Enter password";
   resetPasswordVisibility();
@@ -1124,6 +1144,143 @@ function resetPasswordVisibility() {
     button.textContent = "Show";
     button.setAttribute("aria-label", "Show password");
   });
+}
+
+function bindGlobalClickFallbacks() {
+  if (document.documentElement.dataset.anonchatClickFallbackBound === "true") return;
+  document.documentElement.dataset.anonchatClickFallbackBound = "true";
+  document.addEventListener("click", handleGlobalClickFallback, true);
+}
+
+function claimClick(event) {
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+function clickedEnabled(target) {
+  return !target?.closest?.("button:disabled, [aria-disabled='true'], .disabled");
+}
+
+function handleGlobalClickFallback(event) {
+  const target = event.target;
+  if (!clickedEnabled(target)) return;
+
+  const authModeButton = target.closest?.("[data-auth-mode]");
+  if (authModeButton) {
+    claimClick(event);
+    openAuthRoute(authModeButton.dataset.authMode);
+    return;
+  }
+
+  const passwordToggle = target.closest?.("[data-password-toggle]");
+  if (passwordToggle) {
+    claimClick(event);
+    togglePasswordVisibility(passwordToggle);
+    return;
+  }
+
+  const socialButton = target.closest?.("[data-social-provider]");
+  if (socialButton) {
+    claimClick(event);
+    startSocialAuth(socialButton.dataset.socialProvider);
+    return;
+  }
+
+  const roomButton = target.closest?.("[data-room-id]");
+  if (roomButton && elements.roomList?.contains(roomButton)) {
+    claimClick(event);
+    if (!getChatContextItem(target)) {
+      handleJoinRoom(roomButton.dataset.roomId);
+      closeMobileSidebar();
+    }
+    return;
+  }
+
+  const menuAction = target.closest?.("[data-menu-action]");
+  if (menuAction && !target.closest?.(".admin-dashboard-view")) {
+    claimClick(event);
+    handleDashboardMenuClick({ target: menuAction, preventDefault() {}, stopPropagation() {} });
+    return;
+  }
+
+  const dmProfile = target.closest?.(".slack-dm-list [data-profile-author-id]");
+  if (dmProfile) {
+    claimClick(event);
+    openUserProfileFromTrigger(dmProfile);
+    closeMobileSidebar();
+    return;
+  }
+
+  if (target.closest?.("#sidebarOverlay")) {
+    claimClick(event);
+    closeMobileSidebar();
+    return;
+  }
+
+  const button = target.closest?.("button, a");
+  if (!button) return;
+  const id = button.id;
+
+  const handlers = {
+    guestModeButton: startGuestMode,
+    closeAuthPanel,
+    forgotPasswordButton: openPasswordResetModal,
+    accountAccessButton: () => toast("Contact the site admin for manual recovery."),
+    hamburgerBtn: toggleMobileSidebar,
+    closeSidebar: closeMobileSidebar,
+    mobileAppMenuButton: toggleMobileAppMenu,
+    pwaInstallButton: installPwaApp,
+    attachButton: toggleAttachmentMenu,
+    emojiButton: toggleEmojiPicker,
+    voiceButton: toggleVoiceRecording,
+    pollButton: () => {
+      closeComposerPopovers();
+      createPoll();
+    },
+    logoutButton: logout,
+    profileButton: () => navigateTo(PROFILE_ROUTE),
+    quickConfession: startConfession,
+    togglePanel: () => elements.detailsPanel?.classList.toggle("open"),
+    settingsTopButton: () => navigateTo(SETTINGS_ROUTE),
+    topbarSearchButton: openInlineMessageSearch,
+    mediaGalleryButton: openMediaGallery,
+    closeSearchBtn: closeInlineMessageSearch,
+    closeDetailsPanel: () => elements.detailsPanel?.classList.remove("open"),
+    notificationButton: openNotifications,
+    closeReportModal: closeReportModal,
+    closeAvatarCropModal: closeAvatarCropper,
+    cancelAvatarCropButton: closeAvatarCropper,
+    saveAvatarCropButton: saveCroppedAvatar,
+    closePasswordResetModal: closePasswordResetModal,
+    requestResetButton: requestPasswordReset,
+    verifyResetOtpButton: verifyPasswordResetOtp,
+    closeComposerPlaceholderModal: closeComposerPlaceholderModal,
+    composerPlaceholderOkButton: closeComposerPlaceholderModal,
+    closeMediaGallery: closeMediaGallery,
+    closeProfilePanel: closeUserProfilePanel,
+    blockFromProfile: blockUserFromProfile,
+    reportFromProfile: reportUserFromProfile,
+    audioCallFromProfile: () => startCallFromProfile("audio"),
+    videoCallFromProfile: () => startCallFromProfile("video"),
+    topbarAudioCallButton: () => startCallWithLatestPeer("audio"),
+    topbarVideoCallButton: () => startCallWithLatestPeer("video"),
+    acceptCallButton: acceptIncomingCall,
+    rejectCallButton: () => rejectIncomingCall("rejected"),
+    endCallButton: () => endCurrentCall("ended", true),
+    muteCallButton: toggleCallMute,
+    cameraCallButton: toggleCallCamera,
+    switchCameraButton: switchCallCamera,
+    fullscreenCallButton: toggleCallFullscreen,
+    minimizeCallButton: minimizeCallUi,
+    floatingCallWidget: restoreCallUi,
+  };
+
+  if (handlers[id]) {
+    claimClick(event);
+    handlers[id]();
+    return;
+  }
+
 }
 
 function startGuestMode() {
@@ -1261,16 +1418,12 @@ function validateAuthInputs() {
   }
 
   const fullName = elements.fullNameInput.value.trim();
-  const contactNumber = elements.contactInput.value.trim();
   const username = elements.usernameInput.value.trim().toLowerCase();
   const email = elements.emailInput.value.trim();
   const password = elements.passwordInput.value;
-  const confirmPassword = elements.confirmPasswordInput.value;
+  const dateOfBirth = elements.dateOfBirthInput.value;
 
   if (!fullName) return { field: elements.fullNameInput, message: "Full name is required." };
-  if (!/^\+?[0-9\s-]{7,20}$/.test(contactNumber)) {
-    return { field: elements.contactInput, message: "Enter a valid contact number." };
-  }
   if (!/^[a-z0-9_]{3,24}$/.test(username)) {
     return { field: elements.usernameInput, message: "Username must be 3-24 characters using letters, numbers, or underscore." };
   }
@@ -1284,8 +1437,9 @@ function validateAuthInputs() {
     return { field: elements.passwordInput, message: error.message };
   }
 
-  if (password !== confirmPassword) {
-    return { field: elements.confirmPasswordInput, message: "Passwords do not match." };
+  const birthDateError = validateDateOfBirthValue(dateOfBirth);
+  if (birthDateError) {
+    return { field: elements.dateOfBirthInput, message: birthDateError };
   }
 
   return null;
@@ -1350,35 +1504,41 @@ function getAuthErrorField(message = "") {
   if (text.includes("password") || text.includes("symbol") || text.includes("uppercase") || text.includes("lowercase")) {
     return elements.passwordInput;
   }
-  if (text.includes("contact")) return elements.contactInput;
+  if (text.includes("birth") || text.includes("date")) return elements.dateOfBirthInput;
   if (text.includes("full name")) return elements.fullNameInput;
-  if (text.includes("confirm") || text.includes("match")) return elements.confirmPasswordInput;
 
   return null;
 }
 
 function createRegisterPayload() {
   const password = elements.passwordInput.value;
-  const confirmPassword = elements.confirmPasswordInput.value;
 
   validatePasswordRules(password);
 
-  if (password !== confirmPassword) {
-    throw new Error("Passwords do not match.");
-  }
-
   return {
     fullName: elements.fullNameInput.value.trim(),
-    contactNumber: elements.contactInput.value.trim(),
     username: elements.usernameInput.value.trim(),
     email: elements.emailInput.value.trim(),
-    gender: elements.genderSelect.value,
-    department: elements.departmentInput.value.trim(),
-    studyYear: elements.studyYearSelect.value,
     password,
-    confirmPassword,
-    campus: elements.campusSelect.value,
+    dateOfBirth: elements.dateOfBirthInput.value,
   };
+}
+
+function validateDateOfBirthValue(value) {
+  const text = String(value || "").trim();
+  if (!text) return "Date of birth is required.";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return "Enter a valid date of birth.";
+
+  const birthDate = new Date(`${text}T00:00:00.000Z`);
+  if (Number.isNaN(birthDate.getTime()) || birthDate.toISOString().slice(0, 10) !== text) {
+    return "Enter a valid date of birth.";
+  }
+
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  if (birthDate.getTime() > todayUtc) return "Date of birth cannot be in the future.";
+
+  return "";
 }
 
 function validatePasswordRules(password) {
@@ -1394,7 +1554,108 @@ function validatePasswordRules(password) {
 }
 
 async function startSocialAuth(provider) {
-  toast(`${provider} login is not enabled on this backend yet.`);
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  if (!["google", "facebook"].includes(normalizedProvider)) {
+    toast("Choose Google or Facebook login.");
+    return;
+  }
+
+  if (state.authMode === "admin") {
+    toast("Admin accounts must use admin login.");
+    return;
+  }
+
+  const params = new URLSearchParams({
+    mode: state.authMode === "register" ? "register" : "login",
+  });
+
+  if (state.authMode === "register") {
+    const dateOfBirth = elements.dateOfBirthInput?.value || "";
+    const birthDateError = validateDateOfBirthValue(dateOfBirth);
+    if (birthDateError) {
+      showAuthError("Select date of birth before social signup.", elements.dateOfBirthInput);
+      return;
+    }
+    params.set("dateOfBirth", dateOfBirth);
+  }
+
+  const label = normalizedProvider === "google" ? "Google" : "Facebook";
+  const popup = window.open(
+    "",
+    `anonchat-${normalizedProvider}-auth`,
+    "width=520,height=720,menubar=no,toolbar=no,location=yes,status=no,resizable=yes,scrollbars=yes"
+  );
+
+  if (!popup) {
+    toast(`Allow popups to continue with ${label}.`);
+    return;
+  }
+
+  popup.location.href = `/api/auth/social/${encodeURIComponent(normalizedProvider)}/start?${params.toString()}`;
+  popup.focus?.();
+  toast(`Continue with ${label} in the popup.`);
+}
+
+function bindSocialAuthListener() {
+  if (document.documentElement.dataset.anonchatSocialAuthBound === "true") return;
+  document.documentElement.dataset.anonchatSocialAuthBound = "true";
+  window.addEventListener("message", handleSocialAuthMessage);
+  window.addEventListener("storage", handleSocialAuthStorage);
+}
+
+function handleSocialAuthMessage(event) {
+  if (!isTrustedSocialAuthOrigin(event.origin)) return;
+  const payload = event.data || {};
+  if (payload.type !== "anonchat:social-auth") return;
+  completeSocialAuth(payload);
+}
+
+function handleSocialAuthStorage(event) {
+  if (event.key !== "anonchat-social-auth-result" || !event.newValue) return;
+  try {
+    completeSocialAuth(JSON.parse(event.newValue));
+    localStorage.removeItem("anonchat-social-auth-result");
+  } catch {
+    toast("Social login response could not be read.");
+  }
+}
+
+function isTrustedSocialAuthOrigin(origin) {
+  if (!origin || origin === "null") return false;
+  if (origin === window.location.origin) return true;
+
+  try {
+    const current = new URL(window.location.origin);
+    const candidate = new URL(origin);
+    const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+    return localHosts.has(current.hostname) && localHosts.has(candidate.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function completeSocialAuth(payload) {
+  if (!payload.ok) {
+    showAuthError(payload.error || "Social login failed.");
+    return;
+  }
+
+  const session = payload.session;
+  if (!session?.token || !session?.user) {
+    showAuthError("Social login returned an invalid session.");
+    return;
+  }
+
+  state.session = session;
+  saveSession(session);
+  elements.authForm?.reset();
+  resetPasswordVisibility();
+  connectLiveUpdates();
+  closeAuthPanel();
+  navigateTo(CHAT_ROUTE, { render: false });
+  render();
+  toast("Logged in successfully.");
+  refreshAuthenticatedStateAfterAuth();
 }
 
 function openPasswordResetModal() {
@@ -1714,13 +1975,17 @@ async function handleMessageSubmit(event) {
   }
 
   if (!state.session?.token) {
-    handleApiError({ status: 401, message: "Login required. Please log in again." });
+    toast("Please login to send messages");
     return;
   }
 
   if (isAdmin()) {
     toast("Admin console cannot send student chat messages.");
     return;
+  }
+
+  if (!socket || !socket.connected) {
+    connectLiveUpdates();
   }
 
   const submitKey = messageSubmitKey(text, attachment, state.replyToMessageId);
@@ -1730,6 +1995,7 @@ async function handleMessageSubmit(event) {
   window.clearTimeout(messageSubmitCooldownTimer);
 
   let clientTempId = "";
+  let replyToMessageId = state.replyToMessageId;
 
   try {
     if (state.editingMessageId) {
@@ -1738,7 +2004,6 @@ async function handleMessageSubmit(event) {
       return;
     }
 
-    const replyToMessageId = state.replyToMessageId;
     clientTempId = createClientTempId();
     const pendingMessage = createOptimisticMessage({ text, attachment, replyToMessageId, clientTempId });
     upsertMessage(pendingMessage);
@@ -1769,6 +2034,18 @@ async function handleMessageSubmit(event) {
       scheduleRoomSummaryRender();
     }
   } catch (error) {
+    console.error("Send failed:", error);
+    if (canFallbackToSocketMessageSend(error)) {
+      socket.emit("message:send", {
+        token: state.session.token,
+        roomId: state.activeRoomId,
+        text,
+        replyToMessageId: replyToMessageId || null,
+        attachment,
+      });
+      return;
+    }
+
     const failed = state.messages.find((message) =>
       message.localStatus === "pending" &&
       (message.clientTempId === clientTempId || message.submitKey === submitKey)
@@ -1778,13 +2055,23 @@ async function handleMessageSubmit(event) {
       failed.delivery = { ...failed.delivery, failedAt: Date.now() };
       renderMessages({ preserveScroll: true });
     }
-    handleApiError(error);
+    if (isSessionExpiredError(error)) {
+      handleApiError(error);
+    } else {
+      toast("Message failed to send. Try again.");
+    }
   } finally {
     isSubmittingMessage = false;
     messageSubmitCooldownTimer = window.setTimeout(() => {
       if (lastMessageSubmitKey === submitKey) lastMessageSubmitKey = "";
     }, 800);
   }
+}
+
+function canFallbackToSocketMessageSend(error) {
+  if (!socket?.connected || !state.session?.token || !state.activeRoomId) return false;
+  const status = Number(error?.status);
+  return status === 404 || status === 405;
 }
 
 function messageSubmitKey(text, attachment, replyToMessageId) {
@@ -3289,15 +3576,21 @@ async function refreshAdminState() {
 
 function applyState(data, options = {}) {
   const previousActiveRoomId = String(state.activeRoomId || "");
-  state.rooms = (data.rooms || []).map(normalizeRoom);
-  const incomingMessages = normalizeMessageList(data.messages || []);
-  state.messages = options.mergeMessages
-    ? normalizeMessageList([...state.messages, ...incomingMessages])
-    : incomingMessages;
-  state.reports = data.reports || [];
-  state.announcements = (data.announcements || []).map(normalizeAnnouncement);
-  state.typing = data.typing || [];
-  state.presence = { ...(state.presence || {}), ...(data.presence || {}) };
+  if (Array.isArray(data.rooms)) {
+    state.rooms = data.rooms.map(normalizeRoom);
+  }
+
+  if (Array.isArray(data.messages)) {
+    const incomingMessages = normalizeMessageList(data.messages);
+    state.messages = options.mergeMessages
+      ? normalizeMessageList([...state.messages, ...incomingMessages])
+      : incomingMessages;
+  }
+
+  if (Array.isArray(data.reports)) state.reports = data.reports;
+  if (Array.isArray(data.announcements)) state.announcements = data.announcements.map(normalizeAnnouncement);
+  if (Array.isArray(data.typing)) state.typing = data.typing;
+  if (data.presence) state.presence = { ...(state.presence || {}), ...data.presence };
   state.stats = data.stats ? { ...state.stats, ...data.stats } : state.stats;
 
   const activeRoomStillExists = state.rooms.some((room) =>
@@ -3314,6 +3607,10 @@ function applyState(data, options = {}) {
     state.activeRoomId = state.rooms.find((room) => canEnterRoom(room))?.id || state.rooms[0]?.id || "general";
   }
   localStorage.setItem(ROOM_KEY, state.activeRoomId);
+
+  if (previousActiveRoomId && String(state.activeRoomId || "") !== previousActiveRoomId) {
+    resetMessageSearch({ render: false });
+  }
 }
 
 function applyRoomFromUrl() {
@@ -3406,7 +3703,7 @@ function roomKey(room = {}) {
 }
 
 function normalizeMessage(message = {}) {
-  const id = String(message.id || message._id || "");
+  const id = String(message.id || message._id || message.messageId || message.clientTempId || message.createdAt || Date.now());
   const createdAt = typeof message.createdAt === "number"
     ? message.createdAt
     : new Date(message.createdAt || Date.now()).getTime();
@@ -3648,8 +3945,14 @@ function debugSocketWarning(...args) {
 
 function connectLiveUpdates() {
   if (typeof io === "undefined") {
-    setConnectionStatus("offline", { toastMessage: "Realtime chat is unavailable." });
-    debugSocketWarning("Socket.io client not loaded.");
+    loadSocketClient()
+      .then(() => {
+        if (typeof io !== "undefined") connectLiveUpdates();
+      })
+      .catch((error) => {
+        setConnectionStatus("offline", { toastMessage: "Realtime chat is unavailable." });
+        debugSocketWarning("Socket.io client not loaded:", error?.message || error);
+      });
     return;
   }
 
@@ -3834,6 +4137,7 @@ function connectLiveUpdates() {
   });
 
   socket.on("disconnect", (reason) => {
+    console.warn("Socket disconnected", reason);
     joinedRoomId = null;
     joiningRoomId = null;
     const canReconnect = socket?.active !== false && reason !== "io client disconnect";
@@ -3847,6 +4151,11 @@ function connectLiveUpdates() {
       callState.status = "reconnecting";
       updateCallUi();
     }
+    window.setTimeout(() => {
+      if (socket && !socket.connected && canReconnect) {
+        socket.connect();
+      }
+    }, 2000);
   });
 
   socket.on("call:incoming", handleIncomingCall);
@@ -3905,15 +4214,60 @@ function connectLiveUpdates() {
   });
 }
 
+function loadSocketClient() {
+  if (typeof io !== "undefined") return Promise.resolve();
+  if (socketClientLoadPromise) return socketClientLoadPromise;
+
+  socketClientLoadPromise = new Promise((resolve, reject) => {
+    const finish = () => {
+      socketClientLoadPromise = null;
+      if (typeof io !== "undefined") {
+        resolve();
+        return;
+      }
+      reject(new Error("Socket.io client did not initialize."));
+    };
+
+    let script = document.querySelector('script[data-socket-client-loader]:not([data-failed="true"])');
+    if (!script) {
+      script = document.createElement("script");
+      script.src = `/socket.io/socket.io.js?v=${Date.now()}`;
+      script.async = true;
+      script.dataset.socketClientLoader = "true";
+      document.head.appendChild(script);
+    }
+
+    const timeout = window.setTimeout(() => {
+      script.dataset.failed = "true";
+      socketClientLoadPromise = null;
+      reject(new Error("Socket.io client request timed out."));
+    }, 5000);
+
+    script.addEventListener("load", () => {
+      window.clearTimeout(timeout);
+      finish();
+    }, { once: true });
+
+    script.addEventListener("error", () => {
+      window.clearTimeout(timeout);
+      script.dataset.failed = "true";
+      socketClientLoadPromise = null;
+      reject(new Error("Socket.io client request failed."));
+    }, { once: true });
+  });
+
+  return socketClientLoadPromise;
+}
+
 function joinActiveRoom() {
   if (!socket?.connected) return;
   if (!state.session?.token) return;
   if (isAdmin()) return;
   if (!state.activeRoomId) return;
-  if (joinedRoomId === state.activeRoomId) return;
-  if (joiningRoomId === state.activeRoomId) return;
 
   const roomId = String(state.activeRoomId);
+  if (String(joinedRoomId || "") === roomId) return;
+  if (String(joiningRoomId || "") === roomId) return;
   joiningRoomId = roomId;
 
   socket.emit("room:join", {
@@ -3927,6 +4281,7 @@ function joinActiveRoom() {
       if (response.roomId && String(response.roomId) !== String(state.activeRoomId)) {
         state.activeRoomId = String(response.roomId);
         localStorage.setItem(ROOM_KEY, state.activeRoomId);
+        resetMessageSearch({ render: false });
       }
       joinedRoomId = String(state.activeRoomId || response.roomId || roomId);
       loadRecentMessagesForRoom(joinedRoomId, { renderAfter: true }).catch(debugSocketWarning);
@@ -3941,7 +4296,7 @@ function joinActiveRoom() {
   window.setTimeout(() => {
     if (joiningRoomId !== roomId) return;
     joiningRoomId = null;
-    if (socket?.connected && joinedRoomId !== roomId) joinActiveRoom();
+    if (socket?.connected && String(joinedRoomId || "") !== roomId) joinActiveRoom();
   }, 4000);
 }
 
@@ -4020,7 +4375,7 @@ function render() {
   document.body.dataset.chatWallpaper = state.userSettings.wallpaper;
   document.body.dataset.chatFontSize = state.userSettings.fontSize;
   ensureVisibleActiveRoom();
-  elements.campusName.textContent = isAdmin() ? "Admin Console" : "Anonymous chat";
+  elements.campusName.textContent = isAdmin() ? "Admin Console" : "Stay in touch with your team!";
   elements.profileName.textContent = isAdmin() ? user.name : anonymousUserLabel(user);
   elements.profileMeta.textContent = isAdmin() ? "site owner" : "Online";
   renderSidebarAvatar(user);
@@ -4209,6 +4564,100 @@ async function persistThemePreference(choice) {
 
 function renderRooms() {
   renderChatRoomSummary();
+  renderSidebarRooms();
+  renderSidebarDirectMessages();
+}
+
+function renderSidebarRooms() {
+  if (!elements.roomList || isAdmin()) return;
+  const query = String(elements.roomSearch?.value || "").trim().toLowerCase();
+  const rooms = getVisibleRooms().filter((room) => {
+    if (!query) return true;
+    const haystack = `${room.name || ""} ${room.desc || ""} ${room.description || ""} ${room.category || ""}`.toLowerCase();
+    return haystack.includes(query);
+  });
+
+  if (!rooms.length) {
+    elements.roomList.innerHTML = `<div class="sidebar-empty-row">No channels found</div>`;
+    return;
+  }
+
+  elements.roomList.innerHTML = rooms.map((room) => {
+    const active = [room.id, room.slug, room._id].map(String).includes(String(state.activeRoomId));
+    const unread = unreadCount(room.id);
+    const onlineCount = room.onlineMembers ?? room.activeMembers ?? 0;
+    return `
+      <button
+        class="room-button slack-channel-row ${active ? "active" : ""}"
+        type="button"
+        data-room-id="${escapeAttr(room.id)}"
+        aria-current="${active ? "true" : "false"}">
+        <span class="room-icon" aria-hidden="true">#</span>
+        <span class="room-copy">
+          <span class="room-title">${escapeHtml(room.name || "Room")}</span>
+          <span class="room-desc">${escapeHtml(numberText(onlineCount))} online</span>
+        </span>
+        ${unread ? `<span class="room-count unread">${numberText(unread)}</span>` : `<span class="room-count">${numberText(room.messageCount || 0)}</span>`}
+      </button>
+    `;
+  }).join("");
+}
+
+function renderSidebarDirectMessages() {
+  if (!elements.sidebarDmList || isAdmin()) return;
+  const activeRoom = getActiveRoom();
+  const currentUserId = state.session?.user?.id;
+  const query = String(elements.roomSearch?.value || "").trim().toLowerCase();
+  const recentByAuthor = new Map();
+
+  [...state.messages]
+    .filter((message) => String(message.roomId) === String(activeRoom.id))
+    .filter((message) => String(message.authorId || "") !== String(currentUserId || ""))
+    .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+    .forEach((message) => {
+      const authorId = String(message.authorId || message.author || "");
+      if (!authorId || recentByAuthor.has(authorId)) return;
+      recentByAuthor.set(authorId, {
+        id: authorId,
+        name: message.author || "Anonymous User",
+        color: message.avatarColor,
+        avatarDataUrl: message.avatarDataUrl,
+        preview: message.deletedAt ? "Deleted message" : (message.text || "Shared an attachment"),
+        createdAt: message.createdAt,
+      });
+    });
+
+  const people = [...recentByAuthor.values()]
+    .filter((person) => {
+      if (!query) return true;
+      return `${person.name || ""} ${person.preview || ""}`.toLowerCase().includes(query);
+    })
+    .slice(0, 6);
+
+  if (!people.length) {
+    const activeCount = Number(activeRoom.onlineMembers || activeRoom.activeMembers || 0);
+    elements.sidebarDmList.innerHTML = `
+      <div class="slack-dm-empty">
+        <span class="avatar">${escapeHtml(initials(activeRoom.name || "AU"))}</span>
+        <div>
+          <strong>${escapeHtml(numberText(activeCount))} online</strong>
+          <small>No recent DMs in this room</small>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  elements.sidebarDmList.innerHTML = people.map((person) => `
+    <button class="slack-dm-row" type="button" data-profile-author-id="${escapeAttr(person.id)}" data-author-id="${escapeAttr(person.id)}" data-author="${escapeAttr(person.name)}">
+      ${renderAvatar(person.name, person.color, person.avatarDataUrl)}
+      <span class="dm-copy">
+        <strong>${escapeHtml(person.name)}</strong>
+        <small>${escapeHtml(truncateText(person.preview, 34))}</small>
+      </span>
+      <time>${escapeHtml(relativeTime(person.createdAt || Date.now()))}</time>
+    </button>
+  `).join("");
 }
 
 function renderChatRoomSummary() {
@@ -5282,19 +5731,28 @@ function handleInlineMessageSearchInput(event) {
   renderMessages();
 }
 
-function closeInlineMessageSearch(options = {}) {
+function resetMessageSearch(options = {}) {
   state.messageSearchQuery = "";
   if (elements.chatSearchInput) elements.chatSearchInput.value = "";
   if (elements.messageSearch) elements.messageSearch.value = "";
+  updateMessageSearchCount(0);
+  if (options.closeInline !== false) {
+    elements.chatSearchBar?.classList.add("hidden");
+    elements.chatRoomTitle?.classList.remove("hidden");
+  }
+  if (options.render) renderMessages();
+}
+
+function closeInlineMessageSearch(options = {}) {
+  resetMessageSearch({ closeInline: true, render: false });
   elements.chatSearchBar?.classList.add("hidden");
   elements.chatRoomTitle?.classList.remove("hidden");
-  updateMessageSearchCount(0);
   if (options.render !== false) renderMessages();
 }
 
 function updateMessageSearchCount(count) {
   if (!elements.chatSearchCount) return;
-  const queryActive = Boolean(state.messageSearchQuery);
+  const queryActive = String(state.messageSearchQuery || "").trim().length > 0;
   elements.chatSearchCount.classList.toggle("hidden", !queryActive);
   if (queryActive) {
     const safeCount = Number(count ?? 0);
@@ -5551,7 +6009,7 @@ function handleDashboardMenuClick(event) {
   if (!button) return;
 
   const action = button.dataset.menuAction;
-  if (getChatContextItem(button)) {
+  if ((event.type === "contextmenu" || event.button === 2) && getChatContextItem(button)) {
     event.preventDefault();
     event.stopPropagation();
     showChatContextMenu(button);
@@ -6081,9 +6539,7 @@ function switchActiveRoom(roomId, options = {}) {
   state.replyToMessageId = null;
   state.editingMessageId = null;
   state.activeReactionMessageId = null;
-  state.messageSearchQuery = "";
-  if (elements.messageSearch) elements.messageSearch.value = "";
-  closeInlineMessageSearch({ render: false });
+  resetMessageSearch({ closeInline: true, render: false });
   joinedRoomId = null;
   joiningRoomId = null;
   joinActiveRoom();
@@ -6691,13 +7147,14 @@ function renderMessages(options = {}) {
   const previousScrollHeight = feed.scrollHeight;
   const wasNearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 96;
   const blockedIds = blockedAuthorIdSet();
-  const query = state.messageSearchQuery;
+  const query = String(state.messageSearchQuery || "").trim().toLowerCase();
+  const hasSearchQuery = query.length > 0;
   const messages = state.messages
     .filter((message) => String(message.roomId) === String(activeRoom.id) && !message.hidden)
     .filter((message) => !(message.deletedFor || []).map(String).includes(String(currentUserId)))
     .filter((message) => !blockedIds.has(String(message.authorId)))
     .filter((message) => {
-      if (!query) return true;
+      if (!hasSearchQuery) return true;
       const text = `${message.text || ""} ${message.author || ""}`.toLowerCase();
       return text.includes(query);
     })
@@ -6706,7 +7163,7 @@ function renderMessages(options = {}) {
   updateMessageSearchCount(messages.length);
 
   if (messages.length === 0) {
-    const emptyText = query ? "No matching messages found." : "No messages yet. Start the room conversation.";
+    const emptyText = hasSearchQuery ? "No matching messages found." : "No messages yet. Start the room conversation.";
     const existingEmpty = feed.firstElementChild?.dataset.renderKey === "empty" ? feed.firstElementChild : null;
     if (!existingEmpty || existingEmpty.textContent !== emptyText || feed.children.length > 1) {
       const empty = document.createElement("div");
@@ -9948,18 +10405,33 @@ function setButtonLoading(button, isLoading, loadingText = "Loading...") {
   };
 }
 
-function handleApiError(error) {
+function isSessionExpiredError(error) {
   const msg = String(error?.message || "").toLowerCase();
-
-  if (
+  return (
     Number(error?.status) === 401 ||
+    msg.includes("401") ||
     msg.includes("session") ||
     msg.includes("expired") ||
     msg.includes("unauthorized") ||
     msg.includes("invalid token")
-  ) {
-    logout();
+  );
+}
+
+function handleApiError(error) {
+  if (isSessionExpiredError(error)) {
+    localStorage.removeItem(SESSION_KEY);
+    state.session = null;
+    if (socket) {
+      socket.disconnect();
+      socket = null;
+      joinedRoomId = null;
+      joiningRoomId = null;
+    }
+    render();
     toast("Session expired. Please log in again.");
+    window.setTimeout(() => {
+      navigateTo(LOGIN_ROUTE, { replace: true });
+    }, 1500);
     return;
   }
 
