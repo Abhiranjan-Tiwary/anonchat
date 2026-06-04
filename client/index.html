@@ -35,12 +35,12 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/css/styles.css?v=social-same-tab-20260605" />
-    <link rel="stylesheet" href="/css/landing-nav-fix.css?v=social-same-tab-20260605" />
-    <link rel="stylesheet" href="/css/auth-page-fix.css?v=social-same-tab-20260605" />
-    <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=social-same-tab-20260605" />
+    <link rel="stylesheet" href="/css/styles.css?v=sidebar-cleanup-20260605" />
+    <link rel="stylesheet" href="/css/landing-nav-fix.css?v=sidebar-cleanup-20260605" />
+    <link rel="stylesheet" href="/css/auth-page-fix.css?v=sidebar-cleanup-20260605" />
+    <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=sidebar-cleanup-20260605" />
     <script src="/socket.io/socket.io.js" async data-socket-client-loader onerror="this.dataset.failed='true'"></script>
-<script src="/js/app.js?v=social-same-tab-20260605" defer></script>
+<script src="/js/app.js?v=sidebar-cleanup-20260605" defer></script>
   </head>
   <body>
     <div id="sidebarOverlay"></div>
@@ -72,6 +72,8 @@
             <a class="primary-btn nav-cta" href="/signup" data-auth-mode="register">Get Started</a>
           </div>
         </header>
+
+        <main class="public-page-view hidden" id="publicPageView" aria-live="polite"></main>
 
         <div class="auth-visual">
           <div class="hero-copy">
@@ -171,6 +173,12 @@
             <a href="mailto:supportanonchat@gmail.com?subject=Contact%20Us%20-%20AnonChat">Contact Us</a>
             <a href="mailto:supportanonchat@gmail.com?subject=Bug%20Report%20-%20AnonChat&body=Describe%20the%20bug%20here...">Report a Bug</a>
             <a href="mailto:supportanonchat@gmail.com?subject=Community%20Guidelines%20-%20AnonChat">Community Guidelines</a>
+          </div>
+          <div>
+            <strong>Legal</strong>
+            <a href="/privacy">Privacy Policy</a>
+            <a href="/data-deletion">Data Deletion</a>
+            <a href="mailto:abhiranjantiwary.cse@gmail.com?subject=AnonChat%20Legal%20Support">Legal Contact</a>
           </div>
           <div>
             <strong>Contact</strong>
@@ -412,7 +420,7 @@
             <input id="roomSearch" type="search" placeholder="Search..." autocomplete="off" />
           </label>
 
-          <div class="sidebar-section-title">
+          <div class="sidebar-section-title sidebar-channel-title">
             <span>Channels</span>
             <button type="button" data-menu-action="create-private" aria-label="Add channel">+</button>
           </div>

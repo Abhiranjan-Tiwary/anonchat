@@ -5,6 +5,8 @@ const LANDING_ROUTE = "/";
 const LOGIN_ROUTE = "/login";
 const SIGNUP_ROUTE = "/signup";
 const ADMIN_LOGIN_ROUTE = "/admin/login";
+const PRIVACY_ROUTE = "/privacy";
+const DATA_DELETION_ROUTE = "/data-deletion";
 const CHAT_ROUTE = "/chat";
 const DASHBOARD_ROUTE = "/dashboard";
 const MY_ROOMS_ROUTE = "/my-rooms";
@@ -12,6 +14,7 @@ const SETTINGS_ROUTE = "/settings";
 const PROFILE_ROUTE = "/profile";
 const NOTIFICATIONS_ROUTE = "/notifications";
 const USER_ROUTE_VALUES = Object.freeze([CHAT_ROUTE, DASHBOARD_ROUTE, MY_ROOMS_ROUTE, SETTINGS_ROUTE, PROFILE_ROUTE, NOTIFICATIONS_ROUTE]);
+const PUBLIC_ROUTE_VALUES = Object.freeze([PRIVACY_ROUTE, DATA_DELETION_ROUTE]);
 const NOTIFICATION_READ_KEY = "anonchat-notifications-read-v1";
 const USER_SETTINGS_KEY = "anonchat-user-settings-v1";
 const THEME_KEY = "anonchat-theme-v1";
@@ -333,6 +336,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 function cacheElements() {
   elements.authView = document.querySelector("#authView");
+  elements.publicPageView = document.querySelector("#publicPageView");
   elements.chatView = document.querySelector("#chatView");
   elements.adminDashboardView = document.querySelector("#adminDashboardView");
   elements.adminDashboardShell = document.querySelector("#adminDashboardShell");
@@ -937,7 +941,7 @@ function normalizeRoute(pathname = window.location.pathname) {
   if (path === "/dashboard/settings") return SETTINGS_ROUTE;
   if (path === "/dashboard/profile") return PROFILE_ROUTE;
   if (path === "/dashboard/notifications") return NOTIFICATIONS_ROUTE;
-  if ([LANDING_ROUTE, LOGIN_ROUTE, SIGNUP_ROUTE, ADMIN_LOGIN_ROUTE, ...USER_ROUTE_VALUES, ...ADMIN_ROUTE_VALUES].includes(path)) {
+  if ([LANDING_ROUTE, LOGIN_ROUTE, SIGNUP_ROUTE, ADMIN_LOGIN_ROUTE, ...PUBLIC_ROUTE_VALUES, ...USER_ROUTE_VALUES, ...ADMIN_ROUTE_VALUES].includes(path)) {
     return path;
   }
   return LANDING_ROUTE;
@@ -945,6 +949,10 @@ function normalizeRoute(pathname = window.location.pathname) {
 
 function isAuthRoute(route = state.route) {
   return route === LOGIN_ROUTE || route === SIGNUP_ROUTE || route === ADMIN_LOGIN_ROUTE;
+}
+
+function isPublicRoute(route = state.route) {
+  return PUBLIC_ROUTE_VALUES.includes(route);
 }
 
 function setAuthRouteScroll(enabled) {
@@ -4293,6 +4301,8 @@ function joinActiveRoom() {
 function renderAuthShell() {
   elements.authView.classList.toggle("hidden", isChatRoute(state.route) || isAdminRoute(state.route));
   elements.authView.classList.toggle("auth-route-mode", isAuthRoute(state.route));
+  elements.authView.classList.toggle("public-page-route", isPublicRoute(state.route));
+  elements.publicPageView?.classList.toggle("hidden", !isPublicRoute(state.route));
   setAuthRouteScroll(isAuthRoute(state.route));
   elements.chatView.classList.add("hidden");
   elements.adminDashboardView?.classList.add("hidden");
@@ -4312,9 +4322,12 @@ function render() {
   const showContentPage = showHome || showMyRooms || showSettings || showProfile || showNotificationsPage;
   const showLanding = !showChat && !showAdminDashboard;
   const showAuthRoute = showLanding && isAuthRoute(route);
+  const showPublicRoute = showLanding && isPublicRoute(route);
 
   elements.authView.classList.toggle("auth-route-mode", showAuthRoute);
+  elements.authView.classList.toggle("public-page-route", showPublicRoute);
   elements.authView.classList.toggle("hidden", !showLanding);
+  elements.publicPageView?.classList.toggle("hidden", !showPublicRoute);
   setAuthRouteScroll(showAuthRoute);
   elements.chatView.classList.toggle("hidden", !showChat);
   elements.chatView.classList.toggle("admin-mode", Boolean(loggedIn && isAdmin()));
@@ -4341,8 +4354,12 @@ function render() {
     } else if (route === LOGIN_ROUTE) {
       updateAuthMode("login");
       openAuthPanel();
+    } else if (showPublicRoute) {
+      closeAuthPanel();
+      renderPublicPage(route);
     } else {
       closeAuthPanel();
+      clearPublicPage();
     }
   }
 
@@ -4390,6 +4407,84 @@ function render() {
 
 function themeChoices() {
   return ["dark", "light", "system"];
+}
+
+function clearPublicPage() {
+  if (!elements.publicPageView) return;
+  elements.publicPageView.innerHTML = "";
+  elements.publicPageView.classList.add("hidden");
+}
+
+function renderPublicPage(route) {
+  if (!elements.publicPageView) return;
+  const email = "abhiranjantiwary.cse@gmail.com";
+  const mailLink = `<a href="mailto:${email}">${email}</a>`;
+
+  if (route === DATA_DELETION_ROUTE) {
+    elements.publicPageView.innerHTML = `
+      <section class="public-policy-shell">
+        <div class="public-policy-card">
+          <p class="public-policy-eyebrow">Account control</p>
+          <h1>User Data Deletion</h1>
+          <p class="public-policy-lead">
+            If you would like your account and associated data removed from AnonChat, please send a request to:
+          </p>
+          <p class="public-contact-line">${mailLink}</p>
+          <div class="public-policy-section">
+            <h2>Email subject</h2>
+            <p><strong>Data Deletion Request</strong></p>
+          </div>
+          <div class="public-policy-section">
+            <h2>Include</h2>
+            <ul>
+              <li>Registered Email Address</li>
+              <li>Username</li>
+            </ul>
+          </div>
+          <p class="public-policy-note">We will process deletion requests within 30 days.</p>
+        </div>
+      </section>
+    `;
+    return;
+  }
+
+  elements.publicPageView.innerHTML = `
+    <section class="public-policy-shell">
+      <div class="public-policy-card">
+        <p class="public-policy-eyebrow">Legal</p>
+        <h1>AnonChat Privacy Policy</h1>
+        <p class="public-policy-lead">
+          This policy explains what AnonChat collects and how we use it to keep the service secure, private, and reliable.
+        </p>
+        <div class="public-policy-grid">
+          <article class="public-policy-section">
+            <h2>Information collected</h2>
+            <p>We collect account details such as full name, username, and email address when you register.</p>
+          </article>
+          <article class="public-policy-section">
+            <h2>Google and Facebook authentication</h2>
+            <p>When you use Google or Facebook login, we receive basic authentication information needed to create or access your AnonChat account.</p>
+          </article>
+          <article class="public-policy-section">
+            <h2>Cookies and sessions</h2>
+            <p>AnonChat uses cookies and session tokens to keep users signed in and protect authenticated routes.</p>
+          </article>
+          <article class="public-policy-section">
+            <h2>User-generated chat content</h2>
+            <p>Messages, attachments, reports, and room activity may be stored so chat, moderation, and safety features work correctly.</p>
+          </article>
+          <article class="public-policy-section">
+            <h2>Security practices</h2>
+            <p>We use password hashing, session protection, moderation tools, access controls, and security-focused server practices.</p>
+          </article>
+          <article class="public-policy-section">
+            <h2>Contact</h2>
+            <p>For privacy questions, contact ${mailLink}.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+  `;
 }
 
 function normalizeThemeChoice(choice) {
@@ -6718,7 +6813,7 @@ async function handleSettingsAction(action, button) {
   }
 
   if (action === "privacy") {
-    openInfoModal("Privacy Policy", "AnonChat stores your account profile, room activity, and safety reports so the platform can work securely. Your public chat identity stays anonymous.");
+    navigateTo(PRIVACY_ROUTE);
     return;
   }
 

@@ -1308,6 +1308,12 @@
   content: none !important;
 }
 
+.chat-shell.user-dashboard.content-page-route .sidebar-channel-title,
+.chat-shell.user-dashboard.content-page-route #roomList,
+.chat-shell.user-dashboard.content-page-route .sidebar-menu .menu-button[data-menu-action="create-private"] {
+  display: none !important;
+}
+
 .room-lock-badge {
   position: absolute !important;
   top: 18px !important;

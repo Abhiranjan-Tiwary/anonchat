@@ -7140,7 +7140,7 @@ textarea.field-invalid {
 
 .landing-footer {
   display: grid;
-  grid-template-columns: 1.2fr repeat(3, minmax(130px, 1fr));
+  grid-template-columns: 1.2fr repeat(4, minmax(130px, 1fr));
   gap: 44px;
   width: 100%;
   border-top: 1px solid rgba(148, 163, 184, 0.1);
@@ -7280,6 +7280,176 @@ textarea.field-invalid {
   font-size: 0.74rem;
 }
 
+.public-page-view {
+  width: min(100% - 48px, 1080px);
+  margin: 0 auto;
+  padding: clamp(34px, 6vw, 78px) 0;
+}
+
+.public-page-view.hidden {
+  display: none !important;
+}
+
+.auth-view.public-page-route {
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background:
+    radial-gradient(circle at 12% 8%, rgba(108, 99, 255, 0.18), transparent 32%),
+    radial-gradient(circle at 86% 14%, rgba(96, 165, 250, 0.12), transparent 32%),
+    #050816;
+}
+
+.auth-view.public-page-route .auth-visual,
+.auth-view.public-page-route .how-it-works,
+.auth-view.public-page-route .auth-brand-panel,
+.auth-view.public-page-route .auth-panel {
+  display: none !important;
+}
+
+.public-policy-shell {
+  display: grid;
+  place-items: center;
+}
+
+.public-policy-card {
+  width: min(100%, 920px);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 28px;
+  background:
+    linear-gradient(145deg, rgba(17, 24, 39, 0.92), rgba(10, 11, 20, 0.88)),
+    rgba(15, 23, 42, 0.92);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.36);
+  padding: clamp(24px, 5vw, 48px);
+}
+
+.public-policy-eyebrow {
+  width: fit-content;
+  margin: 0 0 16px;
+  border: 1px solid rgba(167, 139, 250, 0.28);
+  border-radius: 999px;
+  background: rgba(124, 58, 237, 0.14);
+  color: #c4b5fd;
+  padding: 7px 12px;
+  font-size: 0.76rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.public-policy-card h1 {
+  margin: 0;
+  color: #fff;
+  font-size: clamp(2.25rem, 6vw, 4.4rem);
+  line-height: 1;
+  letter-spacing: -0.055em;
+}
+
+.public-policy-lead {
+  max-width: 760px;
+  margin: 18px 0 28px;
+  color: rgba(232, 234, 240, 0.68);
+  font-size: clamp(1rem, 2vw, 1.12rem);
+  line-height: 1.75;
+}
+
+.public-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.public-policy-section {
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 20px;
+}
+
+.public-policy-section h2 {
+  margin: 0 0 10px;
+  color: #f8fafc;
+  font-size: 1rem;
+}
+
+.public-policy-section p,
+.public-policy-section li,
+.public-contact-line,
+.public-policy-note {
+  color: rgba(232, 234, 240, 0.62);
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+.public-policy-section p,
+.public-contact-line,
+.public-policy-note {
+  margin: 0;
+}
+
+.public-policy-section ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.public-policy-card a {
+  color: #a78bfa;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.public-policy-card a:hover {
+  color: #c4b5fd;
+  text-decoration: underline;
+}
+
+.public-contact-line,
+.public-policy-note {
+  border: 1px solid rgba(108, 99, 255, 0.18);
+  border-radius: 16px;
+  background: rgba(108, 99, 255, 0.1);
+  padding: 16px 18px;
+}
+
+.public-policy-note {
+  margin-top: 16px;
+  color: #dbeafe;
+}
+
+html[data-theme="light"] .auth-view.public-page-route {
+  background:
+    radial-gradient(circle at 12% 8%, rgba(108, 99, 255, 0.13), transparent 32%),
+    radial-gradient(circle at 86% 14%, rgba(14, 165, 233, 0.14), transparent 32%),
+    linear-gradient(180deg, #fbfcff, #eef3ff);
+}
+
+html[data-theme="light"] .public-policy-card {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(73, 86, 120, 0.14);
+  box-shadow: 0 28px 80px rgba(41, 53, 90, 0.16);
+}
+
+html[data-theme="light"] .public-policy-card h1,
+html[data-theme="light"] .public-policy-section h2 {
+  color: #101827;
+}
+
+html[data-theme="light"] .public-policy-lead,
+html[data-theme="light"] .public-policy-section p,
+html[data-theme="light"] .public-policy-section li,
+html[data-theme="light"] .public-contact-line,
+html[data-theme="light"] .public-policy-note {
+  color: #334155;
+}
+
+html[data-theme="light"] .public-policy-section,
+html[data-theme="light"] .public-contact-line,
+html[data-theme="light"] .public-policy-note {
+  background: rgba(248, 250, 255, 0.86);
+  border-color: rgba(73, 86, 120, 0.13);
+}
+
 .auth-view::before {
   content: "";
   position: fixed;
@@ -7368,7 +7538,8 @@ textarea.field-invalid {
 @media (max-width: 640px) {
   .landing-nav,
   .auth-visual,
-  .how-it-works {
+  .how-it-works,
+  .public-page-view {
     width: min(100% - 28px, 1180px);
   }
 
@@ -7411,7 +7582,8 @@ textarea.field-invalid {
 
   .hero-feature-grid,
   .how-rail,
-  .landing-footer {
+  .landing-footer,
+  .public-policy-grid {
     grid-template-columns: 1fr;
   }
 

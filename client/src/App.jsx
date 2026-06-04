@@ -3,6 +3,8 @@ import AdminLayout from "./layouts/AdminLayout.jsx";
 import AppLayout from "./layouts/AppLayout.jsx";
 import { ToastViewport } from "./components/Toast.jsx";
 import Landing from "./pages/app/Landing.jsx";
+import Privacy from "./pages/app/Privacy.jsx";
+import DataDeletion from "./pages/app/DataDeletion.jsx";
 import Login from "./pages/app/Login.jsx";
 import Home from "./pages/app/Home.jsx";
 import Room from "./pages/app/Room.jsx";
@@ -55,6 +57,8 @@ export default function App() {
     <>
       <Routes>
         <Route path="/" element={<Landing />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/data-deletion" element={<DataDeletion />} />
         <Route path="/login" element={<GuestOnly><Login /></GuestOnly>} />
         <Route path="/register" element={<GuestOnly><Login initialMode="register" /></GuestOnly>} />
         <Route path="/signup" element={<GuestOnly><Login initialMode="register" /></GuestOnly>} />

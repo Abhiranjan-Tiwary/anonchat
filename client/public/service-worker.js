@@ -1,13 +1,13 @@
-const CACHE_NAME = "anonchat-shell-v11";
+const CACHE_NAME = "anonchat-shell-v16-sidebar-cleanup";
 const SHELL_ASSETS = [
   "/",
   "/offline.html",
   "/manifest.webmanifest",
-  "/css/styles.css",
-  "/css/landing-nav-fix.css",
-  "/css/auth-page-fix.css",
-  "/css/user-chat-room-fix.css",
-  "/js/app.js?v=auth-fix-20260522-2",
+  "/css/styles.css?v=sidebar-cleanup-20260605",
+  "/css/landing-nav-fix.css?v=sidebar-cleanup-20260605",
+  "/css/auth-page-fix.css?v=sidebar-cleanup-20260605",
+  "/css/user-chat-room-fix.css?v=sidebar-cleanup-20260605",
+  "/js/app.js?v=sidebar-cleanup-20260605",
   "/assets/logo/logo.png",
   "/assets/anonchat-preview.png"
 ];

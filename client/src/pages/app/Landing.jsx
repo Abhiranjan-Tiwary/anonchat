@@ -143,6 +143,12 @@ export default function Landing() {
           toward a production-ready Instagram-style social platform.
         </p>
       </section>
+
+      <footer className="landing-legal-footer">
+        <Link to="/privacy">Privacy Policy</Link>
+        <Link to="/data-deletion">Data Deletion</Link>
+        <a href="mailto:abhiranjantiwary.cse@gmail.com">Contact</a>
+      </footer>
     </main>
   );
 }

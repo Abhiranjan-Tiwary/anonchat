@@ -722,6 +722,8 @@ app.get(
     "/login",
     "/register",
     "/signup",
+    "/privacy",
+    "/data-deletion",
     "/admin",
     "/chat",
     "/dashboard",
