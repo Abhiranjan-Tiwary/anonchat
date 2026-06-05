@@ -3672,6 +3672,15 @@ html, body {
   border-radius: 14px;
   background: rgba(17, 18, 28, 0.78);
   padding: 18px 20px;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+}
+
+.notification-page-item:hover,
+.notification-page-item:focus-visible {
+  border-color: rgba(96, 165, 250, 0.32);
+  background: rgba(96, 165, 250, 0.1);
+  outline: none;
 }
 
 .notification-item-icon {
@@ -3702,6 +3711,15 @@ html, body {
 .notification-page-item[data-notification-type="announcement"] .notification-item-icon {
   background: rgba(108, 99, 255, 0.16);
   color: #c4b5fd;
+}
+
+.notification-page-item[data-notification-type="dm"] {
+  border-left-color: #22d3ee;
+}
+
+.notification-page-item[data-notification-type="dm"] .notification-item-icon {
+  background: rgba(34, 211, 238, 0.16);
+  color: #67e8f9;
 }
 
 .notification-page-item strong {
@@ -5966,6 +5984,10 @@ button[data-settings-action="save-settings"]:hover {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.mobile-dm-switcher {
+  margin-top: 12px;
+}
+
 .mobile-room-switcher p {
   margin: 0 0 10px;
   color: var(--muted);
@@ -5987,6 +6009,11 @@ button[data-settings-action="save-settings"]:hover {
   border-color: rgba(108, 99, 255, 0.42);
   background: rgba(108, 99, 255, 0.18);
   box-shadow: inset 3px 0 0 #6c63ff;
+}
+
+.mobile-dm-list button.unread {
+  border-color: rgba(34, 211, 238, 0.34);
+  background: rgba(34, 211, 238, 0.1);
 }
 
 .mobile-room-list .room-icon {
@@ -6021,6 +6048,16 @@ button[data-settings-action="save-settings"]:hover {
   color: #a78bfa;
   font-size: 0.72rem;
   font-weight: 900;
+}
+
+.mobile-room-list .dm-current {
+  min-width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #2563eb, #06b6d4);
+  color: #fff;
 }
 
 .menu-empty-state {
@@ -11279,3 +11316,383 @@ body:has(#chatView:not(.hidden)) .chat-feed {
 }
 
 /* ===== END OF SCROLL AND NAVBAR FIX ===== */
+
+/* ===== FRIENDS PAGE - PERSONAL DM FOUNDATION ===== */
+.friends-page {
+  display: grid;
+  gap: 18px;
+}
+
+.friends-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.friend-search-card,
+.friend-section,
+.friend-request-card,
+.friend-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(135deg, rgba(108, 99, 255, 0.08), rgba(17, 18, 28, 0.88)),
+    rgba(17, 18, 28, 0.82);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.18);
+}
+
+.friend-search-card {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(260px, 1.2fr);
+  gap: 18px;
+  align-items: end;
+  border-radius: 18px;
+  padding: 18px;
+}
+
+.friend-search-card label,
+.friend-section-head h3 {
+  color: #fff;
+  font-weight: 800;
+}
+
+.friend-search-card label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 1rem;
+}
+
+.friend-search-card p,
+.friend-card p,
+.friend-request-card p {
+  margin: 0;
+  color: rgba(232, 234, 240, 0.5);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.friend-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.friend-search-row input {
+  min-height: 42px;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  padding: 0 13px;
+  font: inherit;
+  outline: none;
+}
+
+.friend-search-row input:focus {
+  border-color: rgba(96, 165, 250, 0.65);
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.13);
+}
+
+.friends-layout-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.friend-section {
+  display: grid;
+  gap: 14px;
+  border-radius: 18px;
+  padding: 18px;
+}
+
+.friend-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.friend-section-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.friend-section-head span {
+  color: rgba(232, 234, 240, 0.52);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.friend-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.friend-list {
+  display: grid;
+  gap: 12px;
+}
+
+.friend-card,
+.friend-request-card {
+  display: grid;
+  gap: 14px;
+  border-radius: 16px;
+  padding: 15px;
+}
+
+.friend-card-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.friend-card-main .friend-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.friend-card-main strong {
+  display: block;
+  overflow: hidden;
+  color: #fff;
+  font-size: 0.96rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.friend-card-main small {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: rgba(232, 234, 240, 0.44);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.friend-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.friend-meta-row span {
+  color: rgba(232, 234, 240, 0.48);
+  font-size: 0.72rem;
+}
+
+.friend-meta-row .online {
+  color: #34d399;
+}
+
+.friend-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.friend-actions button {
+  min-height: 34px;
+  border: 1px solid rgba(108, 99, 255, 0.24);
+  border-radius: 9px;
+  background: rgba(108, 99, 255, 0.16);
+  color: #c4b5fd;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.friend-actions button:hover:not(:disabled) {
+  border-color: rgba(96, 165, 250, 0.5);
+  background: rgba(96, 165, 250, 0.18);
+  color: #bfdbfe;
+}
+
+.friend-actions button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.friend-status-pill {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  border: 1px solid rgba(16, 185, 129, 0.22);
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.11);
+  color: #6ee7b7;
+  padding: 0 10px;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.friend-empty {
+  min-height: 88px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(232, 234, 240, 0.52);
+  text-align: center;
+}
+
+@media (max-width: 1180px) {
+  .friend-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .friends-page-head,
+  .friend-search-card,
+  .friends-layout-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .friends-page-head {
+    display: grid;
+  }
+
+  .friend-search-row {
+    grid-template-columns: 1fr;
+  }
+
+  .friend-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== PERSONAL DM PHASE 4/5 ===== */
+
+.sidebar-dm-title:not(.hidden) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+}
+
+.sidebar-dm-list:not(.hidden) {
+  display: grid;
+  gap: 6px;
+}
+
+.slack-dm-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  padding: 7px 9px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.slack-dm-row:hover,
+.slack-dm-row.active {
+  border-color: rgba(96, 165, 250, 0.28);
+  background: rgba(96, 165, 250, 0.12);
+}
+
+.slack-dm-row.unread .dm-copy strong {
+  color: #fff;
+}
+
+.slack-dm-row .avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  font-size: 0.72rem;
+}
+
+.dm-copy {
+  min-width: 0;
+}
+
+.dm-copy strong,
+.dm-copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dm-copy strong {
+  color: rgba(248, 250, 252, 0.92);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.dm-copy small,
+.slack-dm-row time {
+  color: rgba(203, 213, 225, 0.58);
+  font-size: 0.72rem;
+}
+
+.dm-unread-count {
+  min-width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #2563eb, #06b6d4);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 900;
+}
+
+.dm-sidebar-empty {
+  margin: 4px 0 8px;
+}
+
+.chat-shell.dm-dashboard .details-panel {
+  display: none !important;
+}
+
+.chat-shell.dm-dashboard .chat-main {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+.dm-message .message-card {
+  border-color: rgba(59, 130, 246, 0.18);
+}
+
+.dm-message.mine .message-card {
+  border-color: rgba(34, 211, 238, 0.26);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.28), rgba(6, 182, 212, 0.2));
+}
+
+.dm-empty-state {
+  border: 1px dashed rgba(59, 130, 246, 0.22);
+  background: rgba(15, 23, 42, 0.56);
+}
+
+@media (max-width: 768px) {
+  .slack-dm-row {
+    min-height: 50px;
+    padding: 8px 10px;
+  }
+
+  .chat-shell.dm-dashboard .chat-main {
+    height: 100dvh !important;
+  }
+}

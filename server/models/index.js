@@ -10,6 +10,10 @@ import AuditLog from './AuditLog.js'
 import Announcement from './Announcement.js'
 import PlatformSettings from './PlatformSettings.js'
 import Call from './Call.js'
+import FriendRequest from './FriendRequest.js'
+import Friendship from './Friendship.js'
+import DmThread from './DmThread.js'
+import DmMessage from './DmMessage.js'
 
 const models = {
   User,
@@ -24,7 +28,11 @@ const models = {
   AdminAuditLog: AuditLog,
   Announcement,
   PlatformSettings,
-  Call
+  Call,
+  FriendRequest,
+  Friendship,
+  DmThread,
+  DmMessage
 }
 
 export {
@@ -40,7 +48,11 @@ export {
   AuditLog as AdminAuditLog,
   Announcement,
   PlatformSettings,
-  Call
+  Call,
+  FriendRequest,
+  Friendship,
+  DmThread,
+  DmMessage
 }
 
 export default models

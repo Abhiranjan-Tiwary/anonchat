@@ -114,6 +114,9 @@ const DEFAULT_PLATFORM_SETTINGS = {
   emailNotifications: false,
 };
 const AUDIT_TARGET_TYPES = new Set(["user", "message", "room", "report", "announcement", "settings"]);
+const FRIEND_REQUEST_STATUSES = Object.freeze(["pending", "accepted", "declined", "cancelled"]);
+const FRIENDSHIP_STATUSES = Object.freeze(["active", "removed"]);
+const DM_THREAD_STATUSES = Object.freeze(["active", "archived", "deleted"]);
 
 const MONGODB_URI = process.env.MONGODB_URI || "";
 const hasMongoPlaceholder = /<[^>]+>/.test(MONGODB_URI);
@@ -537,6 +540,24 @@ async function ensureProductionIndexes() {
     db.collection("calls").createIndex({ callerId: 1, targetId: 1, startedAt: -1 }),
     db.collection("reports").createIndex({ status: 1, createdAt: -1 }),
     db.collection("rooms").createIndex({ status: 1, hidden: 1 }),
+    db.collection("friendRequests").createIndex({ id: 1 }, { unique: true, sparse: true }),
+    db.collection("friendRequests").createIndex({ pairKey: 1, status: 1, createdAt: -1 }),
+    db.collection("friendRequests").createIndex({ fromUserId: 1, toUserId: 1, status: 1 }),
+    db.collection("friendRequests").createIndex({ toUserId: 1, status: 1, createdAt: -1 }),
+    db.collection("friendRequests").createIndex({ fromUserId: 1, status: 1, createdAt: -1 }),
+    db.collection("friendships").createIndex({ id: 1 }, { unique: true, sparse: true }),
+    db.collection("friendships").createIndex({ pairKey: 1 }, { unique: true }),
+    db.collection("friendships").createIndex({ userIds: 1, status: 1, updatedAt: -1 }),
+    db.collection("dmThreads").createIndex({ id: 1 }, { unique: true, sparse: true }),
+    db.collection("dmThreads").createIndex({ pairKey: 1 }, { unique: true }),
+    db.collection("dmThreads").createIndex({ participantIds: 1, status: 1, updatedAt: -1 }),
+    db.collection("dmThreads").createIndex({ status: 1, lastMessageAt: -1 }),
+    db.collection("dmMessages").createIndex({ id: 1 }, { unique: true, sparse: true }),
+    db.collection("dmMessages").createIndex({ threadId: 1, createdAt: -1 }),
+    db.collection("dmMessages").createIndex({ senderId: 1, createdAt: -1 }),
+    db.collection("dmMessages").createIndex({ recipientId: 1, createdAt: -1 }),
+    db.collection("dmMessages").createIndex({ participantIds: 1, createdAt: -1 }),
+    db.collection("dmMessages").createIndex({ clientTempId: 1 }, { sparse: true, name: "dmClientTempId_sparse_idx" }),
   ]);
 }
 
@@ -594,6 +615,10 @@ function createMongooseDb(modelMap) {
     announcements: modelMap.Announcement,
     platformSettings: modelMap.PlatformSettings,
     calls: modelMap.Call,
+    friendRequests: modelMap.FriendRequest,
+    friendships: modelMap.Friendship,
+    dmThreads: modelMap.DmThread,
+    dmMessages: modelMap.DmMessage,
   };
 
   return {
@@ -727,11 +752,13 @@ app.get(
     "/admin",
     "/chat",
     "/dashboard",
+    "/friends",
     "/my-rooms",
     "/settings",
     "/profile",
     "/notifications",
     "/dashboard/my-rooms",
+    "/dashboard/friends",
     "/dashboard/settings",
     "/dashboard/profile",
     "/dashboard/notifications",
@@ -750,6 +777,10 @@ app.get(
 );
 
 app.get("/dashboard/rooms/:roomId", (req, res) => {
+  sendFrontend(res);
+});
+
+app.get(["/dm/:threadId", "/dashboard/dm/:threadId"], (req, res) => {
   sendFrontend(res);
 });
 
@@ -1133,6 +1164,178 @@ app.post("/api/users/unblock", async (req, res) => {
       message: "User unblocked",
       blockedUserId: blocked.id,
       user: blocked,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/users/search", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    const query = cleanText(req.query.q || req.query.query || "", 60);
+    const users = await searchUsersForFriendRequest(user, query);
+
+    res.json({
+      success: true,
+      query,
+      users,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/friends", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    const friends = await listFriendsForUser(user);
+
+    res.json({
+      success: true,
+      count: friends.length,
+      friends,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/friends/requests", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    const requests = await listFriendRequestsForUser(user);
+
+    res.json({
+      success: true,
+      ...requests,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.post("/api/friends/requests", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    const targetUserId = req.body.targetUserId || req.body.userId || req.body.toUserId;
+    const result = await createFriendRequest(user, targetUserId);
+
+    res.status(result.created ? 201 : 200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.patch("/api/friends/requests/:requestId", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    const result = await respondToFriendRequest(user, req.params.requestId, req.body.action);
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.delete("/api/friends/requests/:requestId", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    const result = await cancelFriendRequest(user, req.params.requestId);
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/dms/threads", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    const threads = await listDmThreadsForUser(user);
+
+    res.json({
+      success: true,
+      count: threads.length,
+      threads,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.post("/api/dms/threads", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    const targetUserId = req.body.targetUserId || req.body.userId || req.body.recipientId;
+    const result = await getOrCreateDmThread(user, targetUserId);
+
+    res.status(result.created ? 201 : 200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/dms/threads/:threadId/messages", rateLimiters.message, async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    const result = await listDmMessagesForThread(user, req.params.threadId, req.query);
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.post("/api/dms/threads/:threadId/messages", rateLimiters.message, async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    const result = await createDmMessage(user, req.params.threadId, req.body);
+
+    res.status(result.deduped ? 200 : 201).json({
+      success: true,
+      ...result,
+      message: serializeDmMessage(result.message),
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.patch("/api/dms/threads/:threadId/seen", rateLimiters.message, async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    const result = await markDmThreadSeen(req.params.threadId, user);
+
+    res.json({
+      success: true,
+      ...result,
     });
   } catch (error) {
     handleError(res, error);
@@ -3994,6 +4197,834 @@ async function blockedAuthorIds(user) {
   return new Set([...directIds, ...hydrated.map((blockedUser) => String(blockedUser.id || ""))]);
 }
 
+function normalizeSocialUserId(value) {
+  return cleanText(value, 80);
+}
+
+function socialPairKey(firstUserId, secondUserId) {
+  const first = normalizeSocialUserId(firstUserId);
+  const second = normalizeSocialUserId(secondUserId);
+  if (!first || !second) throw createHttpError(400, "Two users are required.");
+  if (first === second) throw createHttpError(400, "You cannot connect with yourself.");
+  return [first, second].sort().join(":");
+}
+
+function socialPairUserIds(firstUserId, secondUserId) {
+  return socialPairKey(firstUserId, secondUserId).split(":");
+}
+
+async function findActiveUserById(userId) {
+  const id = normalizeSocialUserId(userId);
+  if (!id) throw createHttpError(400, "User is required.");
+  const user = await db.collection("users").findOne({ id, status: { $ne: "deleted" }, role: { $nin: ["admin", "guest"] } });
+  if (!user) throw createHttpError(404, "User not found.");
+  if (user.status === "suspended") throw createHttpError(403, "This user is not available right now.");
+  return user;
+}
+
+async function findUserByIdAnyStatus(userId) {
+  const id = normalizeSocialUserId(userId);
+  if (!id) throw createHttpError(400, "User is required.");
+  const user = await db.collection("users").findOne({ id });
+  if (!user) throw createHttpError(404, "User not found.");
+  return user;
+}
+
+async function usersHaveBlockedEachOther(firstUser, secondUser) {
+  const [firstBlocked, secondBlocked] = await Promise.all([
+    blockedAuthorIds(firstUser),
+    blockedAuthorIds(secondUser),
+  ]);
+
+  return firstBlocked.has(String(secondUser.id || "")) || secondBlocked.has(String(firstUser.id || ""));
+}
+
+async function assertCanCreateSocialConnection(currentUser, targetUser) {
+  if (!currentUser?.id) throw createHttpError(401, "Please log in again.");
+  if (!targetUser?.id) throw createHttpError(404, "User not found.");
+  if (String(currentUser.id) === String(targetUser.id)) throw createHttpError(400, "You cannot send a request to yourself.");
+  if (["admin", "guest"].includes(currentUser.role) || ["admin", "guest"].includes(targetUser.role)) {
+    throw createHttpError(403, "Only registered users can use personal chat.");
+  }
+  if (currentUser.status === "suspended" || targetUser.status === "suspended") throw createHttpError(403, "This account is not available.");
+  if (await usersHaveBlockedEachOther(currentUser, targetUser)) throw createHttpError(403, "You cannot connect with this user.");
+}
+
+async function existingFriendshipForUsers(firstUserId, secondUserId) {
+  return db.collection("friendships").findOne({
+    pairKey: socialPairKey(firstUserId, secondUserId),
+    status: "active",
+  });
+}
+
+async function pendingFriendRequestForUsers(firstUserId, secondUserId) {
+  return db.collection("friendRequests").findOne({
+    pairKey: socialPairKey(firstUserId, secondUserId),
+    status: "pending",
+  });
+}
+
+async function assertCanCreateDmThread(currentUser, targetUser) {
+  await assertCanCreateSocialConnection(currentUser, targetUser);
+  const friendship = await existingFriendshipForUsers(currentUser.id, targetUser.id);
+  if (!friendship) throw createHttpError(403, "You can message only accepted friends.");
+  return friendship;
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function timestampValue(value) {
+  if (!value) return 0;
+  if (typeof value === "number") return value;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function socialObjectIdForUser(user) {
+  return user?._id && isMongoObjectId(user._id) ? objectIdFromValue(user._id) : null;
+}
+
+function displayNameForUser(user = {}) {
+  return cleanText(user.fullName || user.anonymousName || user.username || "Anonymous User", 80);
+}
+
+function publicUserCard(user = {}, relationship = {}) {
+  const status = relationship.status || "can_request";
+  const canSeePhoto = status === "friends" || (user.privacySettings || {}).profilePhoto !== "nobody";
+
+  return {
+    id: String(user.id || ""),
+    username: user.username || "",
+    fullName: user.fullName || "",
+    name: displayNameForUser(user),
+    anonymousName: user.anonymousName || "",
+    about: user.about || "",
+    customStatus: user.customStatus || "",
+    avatarColor: user.avatarColor || "#6c63ff",
+    avatarDataUrl: canSeePhoto ? user.avatarDataUrl || "" : "",
+    online: socketUserIds(user.id).length > 0,
+    lastSeen: timestampValue(user.lastSeen),
+    relationship: {
+      status,
+      requestId: relationship.requestId || "",
+      friendshipId: relationship.friendshipId || "",
+      canSendRequest: status === "can_request",
+      canRespond: status === "incoming_request",
+      canMessage: status === "friends",
+    },
+  };
+}
+
+async function usersByPublicId(userIds = [], options = {}) {
+  const ids = [...new Set(userIds.map((id) => String(id || "")).filter(Boolean))];
+  if (!ids.length) return new Map();
+
+  const filter = { id: { $in: ids } };
+  if (options.activeOnly !== false) {
+    filter.status = "active";
+    filter.role = { $nin: ["admin", "guest"] };
+  }
+
+  const users = await db.collection("users").find(filter).toArray();
+  return new Map(users.map((user) => [String(user.id), user]));
+}
+
+function friendshipRelationship(friendship = null) {
+  return friendship ? { status: "friends", friendshipId: friendship.id || "" } : null;
+}
+
+function requestRelationship(request = null, viewerId = "") {
+  if (!request) return null;
+  const direction = String(request.fromUserId || "") === String(viewerId || "") ? "request_sent" : "incoming_request";
+  return { status: direction, requestId: request.id || "" };
+}
+
+async function relationshipMapsForUsers(viewerId, targetUserIds = []) {
+  const pairKeys = [...new Set(targetUserIds.map((targetId) => socialPairKey(viewerId, targetId)))];
+  if (!pairKeys.length) {
+    return {
+      friendshipsByPairKey: new Map(),
+      requestsByPairKey: new Map(),
+    };
+  }
+
+  const [friendships, requests] = await Promise.all([
+    db.collection("friendships").find({ pairKey: { $in: pairKeys }, status: "active" }).toArray(),
+    db.collection("friendRequests").find({ pairKey: { $in: pairKeys }, status: "pending" }).toArray(),
+  ]);
+
+  return {
+    friendshipsByPairKey: new Map(friendships.map((friendship) => [String(friendship.pairKey), friendship])),
+    requestsByPairKey: new Map(requests.map((request) => [String(request.pairKey), request])),
+  };
+}
+
+function relationshipForUser(viewerId, targetId, maps) {
+  const pairKey = socialPairKey(viewerId, targetId);
+  return (
+    friendshipRelationship(maps.friendshipsByPairKey.get(pairKey)) ||
+    requestRelationship(maps.requestsByPairKey.get(pairKey), viewerId) ||
+    { status: "can_request" }
+  );
+}
+
+function serializeFriendRequest(request = {}, viewerId = "", otherUser = null) {
+  const direction = String(request.fromUserId || "") === String(viewerId || "") ? "sent" : "incoming";
+  const relationship = requestRelationship(request, viewerId);
+
+  return {
+    id: String(request.id || request._id || ""),
+    fromUserId: String(request.fromUserId || ""),
+    toUserId: String(request.toUserId || ""),
+    pairKey: request.pairKey || socialPairKey(request.fromUserId, request.toUserId),
+    status: request.status || "pending",
+    direction,
+    createdAt: timestampValue(request.createdAt),
+    updatedAt: timestampValue(request.updatedAt),
+    respondedAt: timestampValue(request.respondedAt),
+    respondedByUserId: request.respondedByUserId || "",
+    user: otherUser ? publicUserCard(otherUser, relationship) : null,
+  };
+}
+
+function emitFriendRealtime(userId, event, payload) {
+  emitToUser(userId, event, payload);
+  emitToUser(userId, "friends:update", {
+    type: event,
+    ...payload,
+  });
+}
+
+function friendNotification(type, actorUser, request) {
+  const actorName = displayNameForUser(actorUser);
+  const messages = {
+    request: `${actorName} sent you a friend request.`,
+    accepted: `${actorName} accepted your friend request.`,
+    declined: `${actorName} declined your friend request.`,
+    cancelled: `${actorName} cancelled the friend request.`,
+  };
+
+  return {
+    id: createId("notif"),
+    type: `friend-${type}`,
+    title: "Friend request",
+    message: messages[type] || "Friend request updated.",
+    fromUserId: actorUser.id || "",
+    requestId: request.id || "",
+    createdAt: Date.now(),
+  };
+}
+
+async function searchUsersForFriendRequest(viewer, query) {
+  const text = cleanText(query, 60);
+  if (text.length < 2) return [];
+
+  const currentBlockedIds = await blockedAuthorIds(viewer);
+  const searchRegex = new RegExp(escapeRegExp(text), "i");
+  const candidates = await db.collection("users").find({
+    id: { $nin: [String(viewer.id), ...currentBlockedIds] },
+    role: { $nin: ["admin", "guest"] },
+    status: "active",
+    $or: [
+      { username: searchRegex },
+      { fullName: searchRegex },
+      { anonymousName: searchRegex },
+    ],
+  }).limit(20).toArray();
+
+  const visibleUsers = candidates.filter((candidate) => {
+    const blockedRecords = Array.isArray(candidate.blockedUserRecords) ? candidate.blockedUserRecords : [];
+    return !blockedRecords.some((record) => String(record.userId || "") === String(viewer.id));
+  });
+  const maps = await relationshipMapsForUsers(viewer.id, visibleUsers.map((candidate) => candidate.id));
+
+  return visibleUsers.map((candidate) => publicUserCard(
+    candidate,
+    relationshipForUser(viewer.id, candidate.id, maps)
+  ));
+}
+
+async function listFriendsForUser(user) {
+  const friendships = await db.collection("friendships")
+    .find({ userIds: user.id, status: "active" })
+    .sort({ updatedAt: -1 })
+    .toArray();
+  const friendIds = friendships.map((friendship) => (
+    (friendship.userIds || []).map(String).find((friendId) => friendId !== String(user.id))
+  )).filter(Boolean);
+  const users = await usersByPublicId(friendIds);
+
+  return friendships
+    .map((friendship) => {
+      const friendId = (friendship.userIds || []).map(String).find((id) => id !== String(user.id));
+      const friendUser = users.get(String(friendId));
+      if (!friendUser) return null;
+      return {
+        friendshipId: friendship.id || "",
+        since: timestampValue(friendship.createdAt),
+        lastInteractionAt: timestampValue(friendship.lastInteractionAt || friendship.updatedAt),
+        user: publicUserCard(friendUser, { status: "friends", friendshipId: friendship.id || "" }),
+      };
+    })
+    .filter(Boolean);
+}
+
+async function listFriendRequestsForUser(user) {
+  const [incomingRequests, sentRequests] = await Promise.all([
+    db.collection("friendRequests").find({ toUserId: user.id, status: "pending" }).sort({ createdAt: -1 }).toArray(),
+    db.collection("friendRequests").find({ fromUserId: user.id, status: "pending" }).sort({ createdAt: -1 }).toArray(),
+  ]);
+  const users = await usersByPublicId([
+    ...incomingRequests.map((request) => request.fromUserId),
+    ...sentRequests.map((request) => request.toUserId),
+  ]);
+
+  return {
+    incoming: incomingRequests
+      .map((request) => serializeFriendRequest(request, user.id, users.get(String(request.fromUserId))))
+      .filter((request) => request.user),
+    sent: sentRequests
+      .map((request) => serializeFriendRequest(request, user.id, users.get(String(request.toUserId))))
+      .filter((request) => request.user),
+  };
+}
+
+async function createFriendRequest(user, targetUserId) {
+  const target = await findActiveUserById(targetUserId);
+  await assertCanCreateSocialConnection(user, target);
+
+  const friendship = await existingFriendshipForUsers(user.id, target.id);
+  if (friendship) {
+    return {
+      created: false,
+      alreadyFriends: true,
+      friend: publicUserCard(target, { status: "friends", friendshipId: friendship.id || "" }),
+    };
+  }
+
+  const pendingRequest = await pendingFriendRequestForUsers(user.id, target.id);
+  if (pendingRequest) {
+    return {
+      created: false,
+      alreadyPending: true,
+      request: serializeFriendRequest(pendingRequest, user.id, String(pendingRequest.fromUserId) === String(user.id) ? target : target),
+    };
+  }
+
+  const request = {
+    id: createId("fr"),
+    fromUserId: user.id,
+    toUserId: target.id,
+    fromUserObjectId: socialObjectIdForUser(user),
+    toUserObjectId: socialObjectIdForUser(target),
+    pairKey: socialPairKey(user.id, target.id),
+    status: "pending",
+    respondedAt: null,
+    respondedByUserId: "",
+  };
+
+  await db.collection("friendRequests").insertOne(request);
+  const storedRequest = await db.collection("friendRequests").findOne({ id: request.id });
+  const outgoingRequest = serializeFriendRequest(storedRequest, user.id, target);
+  const incomingRequest = serializeFriendRequest(storedRequest, target.id, user);
+
+  emitFriendRealtime(target.id, "friend:request:new", {
+    request: incomingRequest,
+    fromUser: publicUserCard(user, { status: "incoming_request", requestId: storedRequest.id }),
+    notification: friendNotification("request", user, storedRequest),
+  });
+
+  return {
+    created: true,
+    request: outgoingRequest,
+  };
+}
+
+async function respondToFriendRequest(user, requestId, action) {
+  const id = cleanText(requestId, 80);
+  const normalizedAction = String(action || "").trim().toLowerCase();
+  const accepted = ["accept", "accepted"].includes(normalizedAction);
+  const declined = ["decline", "declined", "reject", "rejected"].includes(normalizedAction);
+  if (!accepted && !declined) throw createHttpError(400, "Choose accept or decline.");
+
+  const request = await db.collection("friendRequests").findOne({ id, status: "pending" });
+  if (!request) throw createHttpError(404, "Friend request not found.");
+  if (String(request.toUserId) !== String(user.id)) throw createHttpError(403, "Only the recipient can respond to this request.");
+
+  const sender = accepted ? await findActiveUserById(request.fromUserId) : await findUserByIdAnyStatus(request.fromUserId);
+  const now = new Date();
+  const nextStatus = accepted ? "accepted" : "declined";
+
+  if (accepted) {
+    await assertCanCreateSocialConnection(user, sender);
+  }
+
+  await db.collection("friendRequests").updateOne(
+    { id: request.id, status: "pending" },
+    {
+      $set: {
+        status: nextStatus,
+        respondedAt: now,
+        respondedByUserId: user.id,
+      },
+    }
+  );
+  const updatedRequest = await db.collection("friendRequests").findOne({ id: request.id });
+
+  if (!accepted) {
+    emitFriendRealtime(sender.id, "friend:request:declined", {
+      request: serializeFriendRequest(updatedRequest, sender.id, user),
+      notification: friendNotification("declined", user, updatedRequest),
+    });
+
+    return {
+      accepted: false,
+      request: serializeFriendRequest(updatedRequest, user.id, sender),
+    };
+  }
+
+  const pairKey = socialPairKey(user.id, sender.id);
+  const existingFriendship = await db.collection("friendships").findOne({ pairKey });
+  await db.collection("friendships").updateOne(
+    { pairKey },
+    {
+      $set: {
+        userIds: socialPairUserIds(user.id, sender.id),
+        pairKey,
+        status: "active",
+        requestId: request.id,
+        createdByUserId: sender.id,
+        removedAt: null,
+        removedByUserId: "",
+        lastInteractionAt: now,
+      },
+      $setOnInsert: {
+        id: existingFriendship?.id || createId("fs"),
+      },
+    },
+    { upsert: true }
+  );
+  const friendship = await db.collection("friendships").findOne({ pairKey });
+  const recipientCard = publicUserCard(user, { status: "friends", friendshipId: friendship.id || "" });
+  const senderCard = publicUserCard(sender, { status: "friends", friendshipId: friendship.id || "" });
+
+  emitFriendRealtime(sender.id, "friend:request:accepted", {
+    request: serializeFriendRequest(updatedRequest, sender.id, user),
+    friend: recipientCard,
+    friendshipId: friendship.id || "",
+    notification: friendNotification("accepted", user, updatedRequest),
+  });
+  emitFriendRealtime(user.id, "friend:request:accepted", {
+    request: serializeFriendRequest(updatedRequest, user.id, sender),
+    friend: senderCard,
+    friendshipId: friendship.id || "",
+  });
+
+  return {
+    accepted: true,
+    request: serializeFriendRequest(updatedRequest, user.id, sender),
+    friendship: removeMongoId(friendship),
+    friend: senderCard,
+  };
+}
+
+async function cancelFriendRequest(user, requestId) {
+  const id = cleanText(requestId, 80);
+  const request = await db.collection("friendRequests").findOne({ id, status: "pending" });
+  if (!request) throw createHttpError(404, "Friend request not found.");
+  if (String(request.fromUserId) !== String(user.id)) throw createHttpError(403, "Only the sender can cancel this request.");
+
+  const recipient = await findUserByIdAnyStatus(request.toUserId);
+  await db.collection("friendRequests").updateOne(
+    { id: request.id, status: "pending" },
+    {
+      $set: {
+        status: "cancelled",
+        respondedAt: new Date(),
+        respondedByUserId: user.id,
+      },
+    }
+  );
+  const updatedRequest = await db.collection("friendRequests").findOne({ id: request.id });
+
+  emitFriendRealtime(recipient.id, "friend:request:cancelled", {
+    request: serializeFriendRequest(updatedRequest, recipient.id, user),
+    notification: friendNotification("cancelled", user, updatedRequest),
+  });
+
+  return {
+    cancelled: true,
+    request: serializeFriendRequest(updatedRequest, user.id, recipient),
+  };
+}
+
+function plainMapValue(value) {
+  if (!value) return {};
+  if (value instanceof Map) return Object.fromEntries([...value.entries()].map(([key, item]) => [String(key), item]));
+  if (typeof value === "object") return { ...value };
+  return {};
+}
+
+function dmParticipantId(thread = {}, viewerId = "") {
+  return (thread.participantIds || [])
+    .map(String)
+    .find((participantId) => participantId !== String(viewerId || "")) || "";
+}
+
+function dmMessagePreview(message = {}) {
+  const text = cleanText(message.text || "", 160);
+  if (text) return text;
+  if (message.attachment?.voiceNote) return "Voice message";
+  if (message.attachment?.name) return message.attachment.name;
+  if (message.attachment) return "Shared an attachment";
+  return "";
+}
+
+function serializeDmMessage(message = {}) {
+  if (!message || typeof message !== "object") return message;
+  const normalized = normalizeDocument({
+    ...message,
+    reactionSummary: plainMapValue(message.reactionSummary),
+    reactionsByUser: plainMapValue(message.reactionsByUser),
+  });
+  const delivery = normalized.delivery || {};
+  const id = String(normalized.id || normalized._id || "");
+
+  return {
+    ...normalized,
+    id,
+    _id: normalized._id ? String(normalized._id) : undefined,
+    clientTempId: normalized.clientTempId || "",
+    senderId: String(normalized.senderId || ""),
+    recipientId: String(normalized.recipientId || ""),
+    participantIds: (normalized.participantIds || []).map(String),
+    authorId: String(normalized.senderId || ""),
+    createdAt: timestampValue(normalized.createdAt),
+    updatedAt: timestampValue(normalized.updatedAt),
+    delivery: {
+      sentAt: timestampValue(delivery.sentAt),
+      deliveredTo: Array.isArray(delivery.deliveredTo) ? delivery.deliveredTo.map(String) : [],
+      seenBy: Array.isArray(delivery.seenBy) ? delivery.seenBy.map(String) : [],
+    },
+  };
+}
+
+function serializeDmThread(thread = {}, viewerId = "", users = new Map(), lastMessage = null) {
+  if (!thread || typeof thread !== "object") return null;
+  const unreadByUserId = plainMapValue(thread.unreadByUserId);
+  const normalized = normalizeDocument({ ...thread, unreadByUserId });
+  const id = String(normalized.id || normalized._id || "");
+  const participantIds = (normalized.participantIds || []).map(String);
+  const friendId = dmParticipantId(normalized, viewerId);
+  const friendUser = users.get(String(friendId));
+  const relationship = { status: "friends", friendshipId: normalized.friendshipId || "" };
+
+  return {
+    ...normalized,
+    id,
+    _id: normalized._id ? String(normalized._id) : undefined,
+    participantIds,
+    participant: friendUser ? publicUserCard(friendUser, relationship) : null,
+    unreadCount: Math.max(0, Number(unreadByUserId[String(viewerId)] || 0)),
+    lastMessageText: normalized.lastMessageText || (lastMessage ? dmMessagePreview(lastMessage) : ""),
+    lastMessageAt: timestampValue(normalized.lastMessageAt || normalized.updatedAt || normalized.createdAt),
+    createdAt: timestampValue(normalized.createdAt),
+    updatedAt: timestampValue(normalized.updatedAt),
+    lastMessage: lastMessage ? serializeDmMessage(lastMessage) : null,
+  };
+}
+
+async function findDmThreadForUser(threadId, user) {
+  const id = cleanText(threadId, 80);
+  if (!id) throw createHttpError(400, "DM thread is required.");
+  const thread = await db.collection("dmThreads").findOne({
+    id,
+    participantIds: user.id,
+    status: { $ne: "deleted" },
+  });
+  if (!thread) throw createHttpError(404, "Personal chat not found.");
+  return thread;
+}
+
+async function dmUsersForThreads(threads = []) {
+  const userIds = threads.flatMap((thread) => thread.participantIds || []);
+  return usersByPublicId(userIds, { activeOnly: false });
+}
+
+async function listDmThreadsForUser(user) {
+  const threads = await db.collection("dmThreads")
+    .find({
+      participantIds: user.id,
+      status: { $ne: "deleted" },
+      hiddenForUserIds: { $ne: user.id },
+    })
+    .sort({ lastMessageAt: -1, updatedAt: -1 })
+    .limit(80)
+    .toArray();
+  const users = await dmUsersForThreads(threads);
+
+  return threads
+    .map((thread) => serializeDmThread(thread, user.id, users))
+    .filter((thread) => thread?.participant)
+    .sort((a, b) => Number(b.lastMessageAt || b.updatedAt || 0) - Number(a.lastMessageAt || a.updatedAt || 0));
+}
+
+async function getOrCreateDmThread(user, targetUserId) {
+  const target = await findActiveUserById(targetUserId);
+  const friendship = await assertCanCreateDmThread(user, target);
+  const pairKey = socialPairKey(user.id, target.id);
+  let thread = await db.collection("dmThreads").findOne({ pairKey });
+  let created = false;
+
+  if (!thread) {
+    const newThread = {
+      id: createId("dmth"),
+      participantIds: socialPairUserIds(user.id, target.id),
+      pairKey,
+      friendshipId: friendship.id || "",
+      status: "active",
+      lastMessageId: "",
+      lastMessageText: "",
+      lastMessageAt: null,
+      hiddenForUserIds: [],
+      unreadByUserId: {
+        [String(user.id)]: 0,
+        [String(target.id)]: 0,
+      },
+    };
+
+    await db.collection("dmThreads").insertOne(newThread);
+    thread = await db.collection("dmThreads").findOne({ id: newThread.id });
+    created = true;
+  } else if (thread.status !== "active" || (thread.hiddenForUserIds || []).includes(String(user.id))) {
+    await db.collection("dmThreads").updateOne(
+      { id: thread.id },
+      {
+        $set: {
+          status: "active",
+          friendshipId: friendship.id || thread.friendshipId || "",
+        },
+        $pull: { hiddenForUserIds: user.id },
+      }
+    );
+    thread = await db.collection("dmThreads").findOne({ id: thread.id });
+  }
+
+  const users = await usersByPublicId([user.id, target.id], { activeOnly: false });
+  return {
+    created,
+    thread: serializeDmThread(thread, user.id, users),
+  };
+}
+
+async function getDmReplyPreview(messageId, threadId) {
+  const id = cleanText(messageId, 80);
+  if (!id) return null;
+  const message = await db.collection("dmMessages").findOne({
+    id,
+    threadId,
+    deletedAt: null,
+  });
+  if (!message) return null;
+  const users = await usersByPublicId([message.senderId], { activeOnly: false });
+  const sender = users.get(String(message.senderId));
+  return {
+    id: message.id,
+    author: displayNameForUser(sender) || "Message",
+    text: dmMessagePreview(message),
+  };
+}
+
+async function listDmMessagesForThread(user, threadId, query = {}) {
+  const thread = await findDmThreadForUser(threadId, user);
+  const limit = Math.max(1, Math.min(Number.parseInt(query.limit || "50", 10) || 50, 100));
+  const beforeTime = query.before ? new Date(String(query.before)).getTime() : 0;
+  const filters = {
+    threadId: thread.id,
+    hiddenForUserIds: { $ne: user.id },
+  };
+
+  if (Number.isFinite(beforeTime) && beforeTime > 0) {
+    filters.createdAt = { $lt: beforeTime };
+  }
+
+  const messages = await db.collection("dmMessages")
+    .find(filters)
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .toArray();
+  const users = await dmUsersForThreads([thread]);
+
+  return {
+    thread: serializeDmThread(thread, user.id, users),
+    threadId: thread.id,
+    messages: messages.reverse().map(serializeDmMessage),
+  };
+}
+
+async function createDmMessage(user, threadId, body = {}) {
+  const thread = await findDmThreadForUser(threadId, user);
+  const recipientId = dmParticipantId(thread, user.id);
+  const recipient = await findActiveUserById(recipientId);
+  const friendship = await assertCanCreateDmThread(user, recipient);
+  const text = cleanText(body.text, 2000);
+  const attachment = normalizeAttachment(body.attachment);
+  const replyToMessageId = cleanText(body.replyToMessageId || "", 80);
+  const clientTempId = cleanClientTempId(body.clientTempId);
+
+  if (!text && !attachment) throw createHttpError(400, "Message cannot be empty.");
+
+  if (clientTempId) {
+    const existing = await db.collection("dmMessages").findOne({
+      threadId: thread.id,
+      senderId: user.id,
+      clientTempId,
+    });
+
+    if (existing) {
+      const users = await dmUsersForThreads([thread]);
+      return {
+        deduped: true,
+        thread: serializeDmThread(thread, user.id, users, existing),
+        message: existing,
+      };
+    }
+  }
+
+  const moderation = moderateText(text);
+  const createdAt = new Date();
+  const message = {
+    id: createId("dm"),
+    clientTempId,
+    threadId: thread.id,
+    senderId: user.id,
+    recipientId,
+    participantIds: (thread.participantIds || []).map(String),
+    text,
+    type: attachment ? "media" : "text",
+    attachment,
+    replyTo: replyToMessageId ? await getDmReplyPreview(replyToMessageId, thread.id) : null,
+    reactions: 0,
+    reactionSummary: {},
+    reactionsByUser: {},
+    delivery: {
+      sentAt: createdAt,
+      deliveredTo: [],
+      seenBy: [user.id],
+    },
+    hiddenForUserIds: [],
+    editedAt: null,
+    deletedAt: null,
+    deletedBy: "",
+    reported: moderation.flagged,
+  };
+
+  await db.collection("dmMessages").insertOne(message);
+  const storedMessage = await db.collection("dmMessages").findOne({ id: message.id });
+  const lastMessageText = dmMessagePreview(storedMessage);
+  await db.collection("dmThreads").updateOne(
+    { id: thread.id },
+    {
+      $set: {
+        friendshipId: friendship.id || thread.friendshipId || "",
+        status: "active",
+        lastMessageId: storedMessage.id,
+        lastMessageText,
+        lastMessageAt: createdAt,
+      },
+      $inc: {
+        [`unreadByUserId.${String(recipientId)}`]: 1,
+      },
+      $pull: {
+        hiddenForUserIds: { $in: [String(user.id), String(recipientId)] },
+      },
+    }
+  );
+  await db.collection("friendships").updateOne(
+    { id: friendship.id },
+    { $set: { lastInteractionAt: createdAt } }
+  );
+  const updatedThread = await db.collection("dmThreads").findOne({ id: thread.id });
+  await emitDmMessageNew(updatedThread, storedMessage);
+  const users = await dmUsersForThreads([updatedThread]);
+
+  return {
+    deduped: false,
+    thread: serializeDmThread(updatedThread, user.id, users, storedMessage),
+    message: storedMessage,
+  };
+}
+
+async function markDmThreadSeen(threadId, user, options = {}) {
+  const thread = await findDmThreadForUser(threadId, user);
+  const seenAt = new Date();
+  await db.collection("dmMessages").updateMany(
+    {
+      threadId: thread.id,
+      recipientId: user.id,
+      "delivery.seenBy": { $ne: user.id },
+    },
+    {
+      $addToSet: {
+        "delivery.deliveredTo": user.id,
+        "delivery.seenBy": user.id,
+      },
+    }
+  );
+  await db.collection("dmThreads").updateOne(
+    { id: thread.id },
+    {
+      $set: {
+        [`unreadByUserId.${String(user.id)}`]: 0,
+      },
+    }
+  );
+  const updatedThread = await db.collection("dmThreads").findOne({ id: thread.id });
+  const users = await dmUsersForThreads([updatedThread]);
+  const payloadBase = {
+    threadId: updatedThread.id,
+    userId: user.id,
+    seenAt: seenAt.getTime(),
+  };
+
+  if (options.emit !== false) {
+    (updatedThread.participantIds || []).forEach((participantId) => {
+      emitToUser(participantId, "dm:seen", {
+        ...payloadBase,
+        thread: serializeDmThread(updatedThread, participantId, users),
+      });
+    });
+  }
+
+  return {
+    ...payloadBase,
+    thread: serializeDmThread(updatedThread, user.id, users),
+  };
+}
+
+async function emitDmThreadUpdate(thread) {
+  if (!thread?.id) return;
+  const users = await dmUsersForThreads([thread]);
+  (thread.participantIds || []).forEach((participantId) => {
+    emitToUser(participantId, "dm:thread:update", {
+      thread: serializeDmThread(thread, participantId, users),
+    });
+  });
+}
+
+async function emitDmMessageNew(thread, message) {
+  if (!thread?.id || !message?.id) return;
+  const users = await dmUsersForThreads([thread]);
+  (thread.participantIds || []).forEach((participantId) => {
+    emitToUser(participantId, "dm:message:new", {
+      thread: serializeDmThread(thread, participantId, users, message),
+      message: serializeDmMessage(message),
+    });
+  });
+}
+
 async function updateAdminRoom(roomId, input, admin) {
   const current = await db.collection("rooms").findOne({ id: roomId });
   if (!current) throw createHttpError(404, "Room not found.");
@@ -4136,6 +5167,10 @@ function roomChannel(roomId) {
   return `room:${roomId}`;
 }
 
+function dmChannel(threadId) {
+  return `dm:${threadId}`;
+}
+
 async function findRealtimeRoom(roomId) {
   const value = String(roomId || "");
   const filters = [{ id: value }, { slug: value }];
@@ -4233,6 +5268,17 @@ function emitTyping(user, roomId, isTyping) {
     userId: user.id,
     name: user.anonymousName,
     roomId,
+    expiresAt: Date.now() + 3500,
+  });
+}
+
+function emitDmTyping(user, thread, isTyping) {
+  const eventName = isTyping ? "dm:typing:start" : "dm:typing:stop";
+
+  io.to(dmChannel(thread.id)).emit(eventName, {
+    userId: user.id,
+    name: displayNameForUser(user),
+    threadId: thread.id,
     expiresAt: Date.now() + 3500,
   });
 }
@@ -4875,6 +5921,57 @@ io.on("connection", async (socket) => {
     }
   });
 
+  socket.on("dm:join", async ({ token, threadId } = {}, ack) => {
+    try {
+      const user = await requireUser(token);
+      ensureActiveUser(user);
+      const thread = await findDmThreadForUser(threadId, user);
+
+      if (socket.data.dmThreadId) {
+        socket.leave(dmChannel(socket.data.dmThreadId));
+      }
+
+      socket.data.user = user;
+      socket.data.dmThreadId = thread.id;
+      socket.join(dmChannel(thread.id));
+      await markDmThreadSeen(thread.id, user);
+      if (typeof ack === "function") ack({ ok: true, threadId: thread.id });
+    } catch (error) {
+      socket.emit("server-error", { error: error.message || "Personal chat join failed." });
+      if (typeof ack === "function") {
+        ack({ ok: false, error: error.message || "Personal chat join failed." });
+      }
+    }
+  });
+
+  socket.on("dm:leave", async ({ token, threadId } = {}) => {
+    try {
+      const user = await requireUser(token);
+      ensureActiveUser(user);
+
+      if (!threadId || socket.data.dmThreadId === threadId) {
+        if (socket.data.dmThreadId) socket.leave(dmChannel(socket.data.dmThreadId));
+        socket.data.dmThreadId = "";
+      } else {
+        socket.leave(dmChannel(threadId));
+      }
+
+      socket.data.user = user;
+    } catch (error) {
+      socket.emit("server-error", { error: error.message || "Personal chat leave failed." });
+    }
+  });
+
+  socket.on("dm:seen", async ({ token, threadId } = {}) => {
+    try {
+      const user = await requireUser(token);
+      ensureActiveUser(user);
+      await markDmThreadSeen(threadId, user);
+    } catch (error) {
+      socket.emit("server-error", { error: error.message || "Personal chat seen update failed." });
+    }
+  });
+
   socket.on("message:delivered", async ({ token, messageId } = {}) => {
     try {
       const user = await requireUser(token);
@@ -4899,6 +5996,59 @@ io.on("connection", async (socket) => {
       });
     } catch (error) {
       socket.emit("server-error", { error: error.message || "Seen update failed." });
+    }
+  });
+
+  socket.on("typing:start", async ({ token, roomId } = {}) => {
+    try {
+      const user = await requireUser(token);
+      ensureActiveUser(user);
+      const room = await findRealtimeRoom(roomId);
+      if (!room) throw createHttpError(404, "Room not found.");
+      await requireRoomEntry(room, user);
+      socket.data.user = user;
+      handleTyping(user, { roomId: room.id, isTyping: true });
+    } catch (error) {
+      socket.emit("server-error", { error: error.message || "Typing update failed." });
+    }
+  });
+
+  socket.on("typing:stop", async ({ token, roomId } = {}) => {
+    try {
+      const user = await requireUser(token);
+      ensureActiveUser(user);
+      const room = await findRealtimeRoom(roomId);
+      if (!room) throw createHttpError(404, "Room not found.");
+      await requireRoomEntry(room, user);
+      socket.data.user = user;
+      handleTyping(user, { roomId: room.id, isTyping: false });
+    } catch (error) {
+      socket.emit("server-error", { error: error.message || "Typing update failed." });
+    }
+  });
+
+  socket.on("dm:typing:start", async ({ token, threadId } = {}) => {
+    try {
+      const user = await requireUser(token);
+      ensureActiveUser(user);
+      const thread = await findDmThreadForUser(threadId, user);
+      socket.data.user = user;
+      socket.join(dmChannel(thread.id));
+      emitDmTyping(user, thread, true);
+    } catch (error) {
+      socket.emit("server-error", { error: error.message || "Personal chat typing failed." });
+    }
+  });
+
+  socket.on("dm:typing:stop", async ({ token, threadId } = {}) => {
+    try {
+      const user = await requireUser(token);
+      ensureActiveUser(user);
+      const thread = await findDmThreadForUser(threadId, user);
+      socket.data.user = user;
+      emitDmTyping(user, thread, false);
+    } catch (error) {
+      socket.emit("server-error", { error: error.message || "Personal chat typing failed." });
     }
   });
 

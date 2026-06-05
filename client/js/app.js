@@ -9,11 +9,13 @@ const PRIVACY_ROUTE = "/privacy";
 const DATA_DELETION_ROUTE = "/data-deletion";
 const CHAT_ROUTE = "/chat";
 const DASHBOARD_ROUTE = "/dashboard";
+const FRIENDS_ROUTE = "/friends";
+const DM_ROUTE_PREFIX = "/dm";
 const MY_ROOMS_ROUTE = "/my-rooms";
 const SETTINGS_ROUTE = "/settings";
 const PROFILE_ROUTE = "/profile";
 const NOTIFICATIONS_ROUTE = "/notifications";
-const USER_ROUTE_VALUES = Object.freeze([CHAT_ROUTE, DASHBOARD_ROUTE, MY_ROOMS_ROUTE, SETTINGS_ROUTE, PROFILE_ROUTE, NOTIFICATIONS_ROUTE]);
+const USER_ROUTE_VALUES = Object.freeze([CHAT_ROUTE, DASHBOARD_ROUTE, FRIENDS_ROUTE, MY_ROOMS_ROUTE, SETTINGS_ROUTE, PROFILE_ROUTE, NOTIFICATIONS_ROUTE]);
 const PUBLIC_ROUTE_VALUES = Object.freeze([PRIVACY_ROUTE, DATA_DELETION_ROUTE]);
 const NOTIFICATION_READ_KEY = "anonchat-notifications-read-v1";
 const USER_SETTINGS_KEY = "anonchat-user-settings-v1";
@@ -186,6 +188,23 @@ let state = {
   presence: {},
   myRooms: [],
   blockedUsers: [],
+  friends: [],
+  friendRequests: {
+    incoming: [],
+    sent: [],
+  },
+  friendSearchQuery: "",
+  friendSearchResults: [],
+  friendsLoaded: false,
+  friendsLoading: false,
+  friendSearchLoading: false,
+  friendActionLoadingId: "",
+  dmThreads: [],
+  dmThreadsLoaded: false,
+  dmThreadsLoading: false,
+  dmMessagesByThread: {},
+  dmMessagesLoading: false,
+  dmMessagesLoadedAt: {},
   unlockedRoomIds: new Set(),
   userSettings: defaultUserSettings(),
   admin: {
@@ -245,6 +264,8 @@ let chatContextScrollTimer = null;
 let chatContextTouchTimer = null;
 let chatContextTouchMoved = false;
 let joiningRoomId = null;
+let joinedDmThreadId = null;
+let joiningDmThreadId = null;
 let isSubmittingMessage = false;
 let lastMessageSubmitKey = "";
 let messageSubmitCooldownTimer = null;
@@ -254,6 +275,7 @@ let messageTouchState = null;
 let presenceRenderTimer = null;
 let mediaGalleryTab = "images";
 let themePreferenceTimer = null;
+let friendSearchDebounce = null;
 let messageRenderState = {
   roomId: "",
   query: "",
@@ -414,6 +436,7 @@ function cacheElements() {
   elements.mobileAppMenu = document.querySelector("#mobileAppMenu");
   elements.mobileAppMenuSheet = document.querySelector("#mobileAppMenu .mobile-app-menu-sheet");
   elements.mobileMenuRooms = document.querySelector("#mobileMenuRooms");
+  elements.mobileMenuDms = document.querySelector("#mobileMenuDms");
   elements.themeToggleButtons = document.querySelectorAll("[data-theme-toggle]");
   elements.profileName = document.querySelector("#profileName");
   elements.profileMeta = document.querySelector("#profileMeta");
@@ -744,6 +767,12 @@ window.addEventListener("beforeunload", () => {
 
   elements.sidebarDmList?.addEventListener("click", (event) => {
     if (elements.sidebarDmList.hidden) return;
+    const dmThreadButton = event.target.closest("[data-dm-thread-id]");
+    if (dmThreadButton) {
+      openDmThread(dmThreadButton.dataset.dmThreadId);
+      closeMobileSidebar();
+      return;
+    }
     const profileTrigger = event.target.closest("[data-profile-author-id]");
     if (!profileTrigger) return;
     openUserProfileFromTrigger(profileTrigger);
@@ -751,6 +780,7 @@ window.addEventListener("beforeunload", () => {
   });
 
   elements.homeView?.addEventListener("click", handleHomeViewClick);
+  elements.homeView?.addEventListener("input", handleHomeViewInput);
   elements.homeView?.addEventListener("keydown", handleHomeViewKeydown);
   elements.homeView?.addEventListener("click", handleProfilePanelClick);
   elements.homeView?.addEventListener("change", handleProfilePanelChange);
@@ -941,6 +971,9 @@ window.addEventListener("beforeunload", () => {
 function normalizeRoute(pathname = window.location.pathname) {
   const path = pathname.replace(/\/+$/, "") || LANDING_ROUTE;
   if (path === "/dashboard/my-rooms") return MY_ROOMS_ROUTE;
+  if (path === "/dashboard/friends") return FRIENDS_ROUTE;
+  if (path.startsWith("/dashboard/dm/")) return `${DM_ROUTE_PREFIX}/${encodeURIComponent(path.split("/").pop() || "")}`;
+  if (path.startsWith(`${DM_ROUTE_PREFIX}/`)) return path;
   if (path === "/dashboard/settings") return SETTINGS_ROUTE;
   if (path === "/dashboard/profile") return PROFILE_ROUTE;
   if (path === "/dashboard/notifications") return NOTIFICATIONS_ROUTE;
@@ -956,6 +989,15 @@ function isAuthRoute(route = state.route) {
 
 function isPublicRoute(route = state.route) {
   return PUBLIC_ROUTE_VALUES.includes(route);
+}
+
+function isDmRoute(route = state.route) {
+  return String(route || "").startsWith(`${DM_ROUTE_PREFIX}/`);
+}
+
+function activeDmThreadId(route = state.route) {
+  if (!isDmRoute(route)) return "";
+  return decodeURIComponent(String(route || "").slice(DM_ROUTE_PREFIX.length + 1)).trim();
 }
 
 function setAuthRouteScroll(enabled) {
@@ -977,7 +1019,7 @@ function primeAuthRouteScroll() {
 primeAuthRouteScroll();
 
 function isChatRoute(route = state.route) {
-  return USER_ROUTE_VALUES.includes(route);
+  return USER_ROUTE_VALUES.includes(route) || isDmRoute(route);
 }
 
 function isAdminRoute(route = state.route) {
@@ -1989,6 +2031,11 @@ async function handleMessageSubmit(event) {
     connectLiveUpdates();
   }
 
+  if (isDmRoute()) {
+    await handleDmMessageSubmit({ text, attachment });
+    return;
+  }
+
   const submitKey = messageSubmitKey(text, attachment, state.replyToMessageId);
   if (isSubmittingMessage && submitKey === lastMessageSubmitKey) return;
   isSubmittingMessage = true;
@@ -2162,6 +2209,18 @@ async function sendTyping(isTypingNow) {
   if (!state.session || isAdmin()) return;
 
   if (!socket?.connected) return;
+
+  if (isDmRoute()) {
+    const threadId = activeDmThreadId();
+    if (!threadId) return;
+    socket.emit(isTypingNow ? "dm:typing:start" : "dm:typing:stop", {
+      token: state.session.token,
+      threadId,
+    });
+    return;
+  }
+
+  if (!state.activeRoomId) return;
 
   socket.emit(isTypingNow ? "typing:start" : "typing:stop", {
     token: state.session.token,
@@ -3502,6 +3561,14 @@ async function logout() {
     announcements: [],
     settings: {},
   };
+  state.friends = [];
+  state.friendRequests = { incoming: [], sent: [] };
+  state.friendSearchQuery = "";
+  state.friendSearchResults = [];
+  state.friendsLoaded = false;
+  state.friendsLoading = false;
+  state.friendSearchLoading = false;
+  state.friendActionLoadingId = "";
   localStorage.removeItem(SESSION_KEY);
 
   if (socket) {
@@ -3963,6 +4030,8 @@ function connectLiveUpdates() {
     socket.disconnect();
     joinedRoomId = null;
     joiningRoomId = null;
+    joinedDmThreadId = null;
+    joiningDmThreadId = null;
   }
 
   socket = io(API_BASE, {
@@ -4008,6 +4077,7 @@ function connectLiveUpdates() {
       render();
     }
     joinActiveRoom();
+    joinActiveDmThread();
   });
 
   socket.on("message:new", (message) => {
@@ -4111,10 +4181,41 @@ function connectLiveUpdates() {
     renderTypingIndicator();
   });
 
+  socket.on("dm:typing:start", (typingUser = {}) => {
+    if (String(typingUser.userId) === String(state.session?.user?.id)) return;
+    const threadId = String(typingUser.threadId || "");
+    if (!threadId) return;
+    state.typing = [
+      ...state.typing.filter((item) => !(String(item.userId) === String(typingUser.userId) && String(item.threadId) === threadId)),
+      {
+        ...typingUser,
+        dm: true,
+        threadId,
+        expiresAt: Number(typingUser.expiresAt || Date.now() + 3500),
+      },
+    ];
+    renderTypingIndicator();
+    window.setTimeout(renderTypingIndicator, 3600);
+  });
+
+  socket.on("dm:typing:stop", (typingUser = {}) => {
+    const threadId = String(typingUser.threadId || "");
+    state.typing = state.typing.filter((item) => !(String(item.userId) === String(typingUser.userId) && String(item.threadId) === threadId));
+    renderTypingIndicator();
+  });
+
   socket.on("presence:update", ({ presence = {} } = {}) => {
     state.presence = { ...(state.presence || {}), ...presence };
     schedulePresenceRender();
   });
+
+  socket.on("friend:request:new", (payload = {}) => handleFriendRealtimeEvent(payload, "friend-request"));
+  socket.on("friend:request:accepted", (payload = {}) => handleFriendRealtimeEvent(payload, "friend-accepted"));
+  socket.on("friend:request:declined", (payload = {}) => handleFriendRealtimeEvent(payload, "friend-declined"));
+  socket.on("friend:request:cancelled", (payload = {}) => handleFriendRealtimeEvent(payload, "friend-cancelled"));
+  socket.on("dm:thread:update", (payload = {}) => handleDmThreadRealtime(payload));
+  socket.on("dm:message:new", (payload = {}) => handleDmMessageRealtime(payload));
+  socket.on("dm:seen", (payload = {}) => handleDmSeenRealtime(payload));
 
   socket.on("connect_error", (error) => {
     setConnectionStatus("reconnecting", { toastMessage: "Reconnecting to AnonChat..." });
@@ -4134,13 +4235,18 @@ function connectLiveUpdates() {
     });
     joinedRoomId = null;
     joiningRoomId = null;
+    joinedDmThreadId = null;
+    joiningDmThreadId = null;
     joinActiveRoom();
+    joinActiveDmThread();
   });
 
   socket.on("disconnect", (reason) => {
     console.warn("Socket disconnected", reason);
     joinedRoomId = null;
     joiningRoomId = null;
+    joinedDmThreadId = null;
+    joiningDmThreadId = null;
     const canReconnect = socket?.active !== false && reason !== "io client disconnect";
     setConnectionStatus(canReconnect ? "reconnecting" : "offline", {
       toastMessage: canReconnect ? "Connection interrupted. Reconnecting..." : "You are offline.",
@@ -4264,6 +4370,7 @@ function joinActiveRoom() {
   if (!socket?.connected) return;
   if (!state.session?.token) return;
   if (isAdmin()) return;
+  if (isDmRoute()) return;
   if (!state.activeRoomId) return;
 
   const roomId = String(state.activeRoomId);
@@ -4301,6 +4408,47 @@ function joinActiveRoom() {
   }, 4000);
 }
 
+function joinActiveDmThread() {
+  if (!socket?.connected) return;
+  if (!state.session?.token) return;
+  if (isAdmin() || isGuestSession()) return;
+  if (!isDmRoute()) return;
+
+  const threadId = activeDmThreadId();
+  if (!threadId) return;
+  if (String(joinedDmThreadId || "") === threadId) return;
+  if (String(joiningDmThreadId || "") === threadId) return;
+  joiningDmThreadId = threadId;
+
+  socket.emit("dm:join", {
+    token: state.session.token,
+    threadId,
+  }, (response = {}) => {
+    if (activeDmThreadId() !== threadId) return;
+    joiningDmThreadId = null;
+
+    if (response.ok) {
+      joinedDmThreadId = String(response.threadId || threadId);
+      updateDmThreadUnread(joinedDmThreadId, 0);
+      renderSidebarDirectMessages();
+      renderMobileAppMenuDms();
+      renderNotifications();
+      if (state.route === NOTIFICATIONS_ROUTE) renderNotificationsPage();
+      return;
+    }
+
+    joinedDmThreadId = null;
+    debugSocketWarning(response.error || "Personal chat join was not confirmed.");
+    window.setTimeout(joinActiveDmThread, 1000);
+  });
+
+  window.setTimeout(() => {
+    if (joiningDmThreadId !== threadId) return;
+    joiningDmThreadId = null;
+    if (socket?.connected && String(joinedDmThreadId || "") !== threadId) joinActiveDmThread();
+  }, 4000);
+}
+
 function renderAuthShell() {
   elements.authView.classList.toggle("hidden", isChatRoute(state.route) || isAdminRoute(state.route));
   elements.authView.classList.toggle("auth-route-mode", isAuthRoute(state.route));
@@ -4318,11 +4466,13 @@ function render() {
   const showAdminDashboard = loggedIn && isAdmin() && isAdminRoute(route);
   const showChat = loggedIn && !isAdmin() && isChatRoute(route);
   const showHome = showChat && route === DASHBOARD_ROUTE;
+  const showFriends = showChat && route === FRIENDS_ROUTE;
+  const showDm = showChat && isDmRoute(route);
   const showMyRooms = showChat && route === MY_ROOMS_ROUTE;
   const showSettings = showChat && route === SETTINGS_ROUTE;
   const showProfile = showChat && route === PROFILE_ROUTE;
   const showNotificationsPage = showChat && route === NOTIFICATIONS_ROUTE;
-  const showContentPage = showHome || showMyRooms || showSettings || showProfile || showNotificationsPage;
+  const showContentPage = showHome || showFriends || showMyRooms || showSettings || showProfile || showNotificationsPage;
   const showLanding = !showChat && !showAdminDashboard;
   const showAuthRoute = showLanding && isAuthRoute(route);
   const showPublicRoute = showLanding && isPublicRoute(route);
@@ -4336,6 +4486,7 @@ function render() {
   elements.chatView.classList.toggle("admin-mode", Boolean(loggedIn && isAdmin()));
   elements.chatView.classList.toggle("user-dashboard", Boolean(loggedIn && !isAdmin()));
   elements.chatView.classList.toggle("chat-room-dashboard", Boolean(showChat && route === CHAT_ROUTE));
+  elements.chatView.classList.toggle("dm-dashboard", Boolean(showDm));
   elements.chatView.classList.toggle("content-page-route", Boolean(showContentPage));
   elements.chatMain?.classList.toggle("home-mode", Boolean(showContentPage));
   elements.chatMain?.classList.toggle("content-page-mode", Boolean(showContentPage));
@@ -4385,22 +4536,35 @@ function render() {
   state.userSettings = loadUserSettings();
   document.body.dataset.chatWallpaper = state.userSettings.wallpaper;
   document.body.dataset.chatFontSize = state.userSettings.fontSize;
-  ensureVisibleActiveRoom();
+  if (!showDm) ensureVisibleActiveRoom();
   elements.campusName.textContent = isAdmin() ? "Admin Console" : "Stay in touch with your team!";
   elements.profileName.textContent = isAdmin() ? user.name : anonymousUserLabel(user);
   elements.profileMeta.textContent = isAdmin() ? "site owner" : "Online";
   renderSidebarAvatar(user);
+  if (!state.dmThreadsLoaded && !state.dmThreadsLoading && !isGuestSession()) {
+    loadDmThreads({ renderAfter: true }).catch(handleApiError);
+  }
 
   renderRooms();
   syncContentPageChrome(showContentPage);
   updatePresenceUi();
   if (showHome) renderHomeView();
+  if (showFriends) renderFriendsPage();
   if (showMyRooms) renderMyRoomsPage();
   if (showSettings) renderSettingsPage();
   if (showProfile) renderProfilePage();
   if (showNotificationsPage) renderNotificationsPage();
   if (showContentPage) {
     renderNotifications();
+    return;
+  }
+  if (showDm) {
+    renderDmThreadSummary();
+    renderDmMessages();
+    renderTypingIndicator();
+    renderPanels();
+    renderNotifications();
+    joinActiveDmThread();
     return;
   }
   renderMessages();
@@ -4726,74 +4890,61 @@ function renderSidebarRooms() {
 
 function renderSidebarDirectMessages() {
   if (!elements.sidebarDmList || isAdmin()) return;
-  elements.sidebarDmList.innerHTML = "";
-  elements.sidebarDmList.hidden = true;
-  elements.sidebarDmList.setAttribute("aria-hidden", "true");
-  elements.sidebarDmList.classList.add("hidden");
   const title = elements.sidebarDmList.previousElementSibling;
+  elements.sidebarDmList.hidden = false;
+  elements.sidebarDmList.removeAttribute("aria-hidden");
+  elements.sidebarDmList.classList.remove("hidden");
   if (title?.classList.contains("sidebar-dm-title")) {
-    title.hidden = true;
-    title.setAttribute("aria-hidden", "true");
-    title.classList.add("hidden");
+    title.hidden = false;
+    title.removeAttribute("aria-hidden");
+    title.classList.remove("hidden");
   }
-  return;
 
-  const activeRoom = getActiveRoom();
-  const currentUserId = state.session?.user?.id;
   const query = String(elements.roomSearch?.value || "").trim().toLowerCase();
-  const recentByAuthor = new Map();
-
-  [...state.messages]
-    .filter((message) => String(message.roomId) === String(activeRoom.id))
-    .filter((message) => String(message.authorId || "") !== String(currentUserId || ""))
-    .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
-    .forEach((message) => {
-      const authorId = String(message.authorId || message.author || "");
-      if (!authorId || recentByAuthor.has(authorId)) return;
-      recentByAuthor.set(authorId, {
-        id: authorId,
-        name: message.author || "Anonymous User",
-        color: message.avatarColor,
-        avatarDataUrl: message.avatarDataUrl,
-        preview: message.deletedAt ? "Deleted message" : (message.text || "Shared an attachment"),
-        createdAt: message.createdAt,
-      });
-    });
-
-  const people = [...recentByAuthor.values()]
-    .filter((person) => {
+  const threads = (state.dmThreads || [])
+    .filter((thread) => {
+      const person = thread.participant || {};
       if (!query) return true;
-      return `${person.name || ""} ${person.preview || ""}`.toLowerCase().includes(query);
+      return `${person.name || ""} ${person.username || ""} ${thread.lastMessageText || ""}`.toLowerCase().includes(query);
     })
-    .slice(0, 6);
+    .slice(0, 12);
 
-  if (!people.length) {
-    const activeCount = Number(activeRoom.onlineMembers || activeRoom.activeMembers || 0);
+  if (!threads.length) {
     elements.sidebarDmList.innerHTML = `
-      <div class="slack-dm-empty">
-        <span class="avatar">${escapeHtml(initials(activeRoom.name || "AU"))}</span>
+      <div class="slack-dm-empty dm-sidebar-empty">
+        <span class="avatar">DM</span>
         <div>
-          <strong>${escapeHtml(numberText(activeCount))} online</strong>
-          <small>No recent DMs in this room</small>
+          <strong>${state.dmThreadsLoading ? "Loading chats..." : "No personal chats yet"}</strong>
+          <small>Open Friends and message an accepted friend</small>
         </div>
       </div>
     `;
     return;
   }
 
-  elements.sidebarDmList.innerHTML = people.map((person) => `
-    <button class="slack-dm-row" type="button" data-profile-author-id="${escapeAttr(person.id)}" data-author-id="${escapeAttr(person.id)}" data-author="${escapeAttr(person.name)}">
-      ${renderAvatar(person.name, person.color, person.avatarDataUrl)}
+  elements.sidebarDmList.innerHTML = threads.map((thread) => {
+    const person = thread.participant || {};
+    const active = isDmRoute() && activeDmThreadId() === String(thread.id);
+    const unread = Number(thread.unreadCount || 0);
+    const preview = thread.lastMessageText || (thread.lastMessage ? (thread.lastMessage.text || thread.lastMessage.attachment?.name) : "") || "Start a personal chat";
+    return `
+    <button class="slack-dm-row ${active ? "active" : ""} ${unread ? "unread" : ""}" type="button" data-dm-thread-id="${escapeAttr(thread.id)}">
+      ${renderAvatar(person.name || "Friend", person.avatarColor, person.avatarDataUrl)}
       <span class="dm-copy">
-        <strong>${escapeHtml(person.name)}</strong>
-        <small>${escapeHtml(truncateText(person.preview, 34))}</small>
+        <strong>${escapeHtml(person.name || "Friend")}</strong>
+        <small>${escapeHtml(truncateText(preview, 34))}</small>
       </span>
-      <time>${escapeHtml(relativeTime(person.createdAt || Date.now()))}</time>
+      ${unread ? `<span class="dm-unread-count">${numberText(unread)}</span>` : `<time>${escapeHtml(thread.lastMessageAt ? relativeTime(thread.lastMessageAt) : "")}</time>`}
     </button>
-  `).join("");
+  `;
+  }).join("");
 }
 
 function renderChatRoomSummary() {
+  if (isDmRoute()) {
+    renderDmThreadSummary();
+    return;
+  }
   ensureVisibleActiveRoom();
   const activeRoom = getActiveRoom();
   elements.activeRoomName.textContent = activeRoom.name || "Room";
@@ -4824,6 +4975,7 @@ function updateSidebarMenuActive(showHome) {
     const active =
       (action === "home" && state.route === DASHBOARD_ROUTE) ||
       (action === "join-public" && state.route === CHAT_ROUTE) ||
+      (action === "friends" && state.route === FRIENDS_ROUTE) ||
       (action === "profile" && state.route === PROFILE_ROUTE) ||
       (action === "my-rooms" && state.route === MY_ROOMS_ROUTE) ||
       (action === "settings" && state.route === SETTINGS_ROUTE) ||
@@ -4856,6 +5008,1006 @@ function renderHomeView() {
       </div>
     </div>
   `;
+}
+
+function renderFriendsPage() {
+  if (!elements.homeView) return;
+  if (!state.friendsLoaded && !state.friendsLoading && !isGuestSession()) {
+    loadFriendData({ renderAfter: true }).catch(handleApiError);
+  }
+
+  const incoming = state.friendRequests?.incoming || [];
+  const sent = state.friendRequests?.sent || [];
+  const friends = state.friends || [];
+  const searchQuery = state.friendSearchQuery || "";
+  const results = state.friendSearchResults || [];
+  const showSearchHint = searchQuery.trim().length > 0 && searchQuery.trim().length < 2;
+
+  elements.homeView.innerHTML = `
+    <div class="workspace-page friends-page">
+      <div class="home-header friends-page-head">
+        <div>
+          <h2>Friends</h2>
+          <p>Search registered users, send friend requests, and keep personal chats private.</p>
+        </div>
+        <button class="ghost-btn small-action" type="button" data-friend-action="refresh">Refresh</button>
+      </div>
+
+      <section class="friend-search-card">
+        <div>
+          <label for="friendSearchInput">Find people</label>
+          <p>Search by full name, username, or anonymous name.</p>
+        </div>
+        <div class="friend-search-row">
+          <input id="friendSearchInput" type="search" value="${escapeAttr(searchQuery)}" placeholder="Search friends..." autocomplete="off" />
+          <button class="primary-btn compact-primary" type="button" data-friend-action="search">Search</button>
+        </div>
+      </section>
+
+      <section class="friend-section">
+        <div class="friend-section-head">
+          <h3>Search Results</h3>
+          ${state.friendSearchLoading ? `<span>Searching...</span>` : `<span>${numberText(results.length)} found</span>`}
+        </div>
+        ${
+          showSearchHint
+            ? renderFriendEmptyState("Type at least 2 characters to search.")
+            : results.length
+              ? `<div class="friend-card-grid">${results.map((user) => renderFriendUserCard(user, "search")).join("")}</div>`
+              : renderFriendEmptyState(searchQuery.trim() ? "No matching users found." : "Search for a registered user to send a friend request.")
+        }
+      </section>
+
+      <div class="friends-layout-grid">
+        <section class="friend-section">
+          <div class="friend-section-head">
+            <h3>Incoming Requests</h3>
+            <span>${numberText(incoming.length)}</span>
+          </div>
+          ${incoming.length ? `<div class="friend-list">${incoming.map((request) => renderFriendRequestCard(request, "incoming")).join("")}</div>` : renderFriendEmptyState("No pending requests.")}
+        </section>
+
+        <section class="friend-section">
+          <div class="friend-section-head">
+            <h3>Sent Requests</h3>
+            <span>${numberText(sent.length)}</span>
+          </div>
+          ${sent.length ? `<div class="friend-list">${sent.map((request) => renderFriendRequestCard(request, "sent")).join("")}</div>` : renderFriendEmptyState("No sent requests.")}
+        </section>
+      </div>
+
+      <section class="friend-section">
+        <div class="friend-section-head">
+          <h3>Friends List</h3>
+          <span>${state.friendsLoading ? "Loading..." : `${numberText(friends.length)} friend${friends.length === 1 ? "" : "s"}`}</span>
+        </div>
+        ${
+          friends.length
+            ? `<div class="friend-card-grid">${friends.map((entry) => renderFriendUserCard(entry.user, "friend", entry)).join("")}</div>`
+            : renderFriendEmptyState(state.friendsLoading ? "Loading friends..." : "Accepted friends will appear here.")
+        }
+      </section>
+    </div>
+  `;
+}
+
+function renderFriendEmptyState(text) {
+  return `<div class="compact-empty-state friend-empty">${escapeHtml(text)}</div>`;
+}
+
+function normalizePublicUser(user = {}) {
+  const relationship = user.relationship || {};
+  return {
+    id: String(user.id || user._id || ""),
+    username: user.username || "",
+    fullName: user.fullName || "",
+    name: user.name || user.fullName || user.anonymousName || user.username || "AnonChat User",
+    anonymousName: user.anonymousName || "",
+    about: user.about || "",
+    customStatus: user.customStatus || "",
+    avatarColor: user.avatarColor || avatarColor(user.username || user.name),
+    avatarDataUrl: user.avatarDataUrl || "",
+    online: Boolean(user.online),
+    lastSeen: Number(user.lastSeen || 0),
+    relationship: {
+      status: relationship.status || "can_request",
+      requestId: relationship.requestId || "",
+      friendshipId: relationship.friendshipId || "",
+      canSendRequest: relationship.canSendRequest !== false && (relationship.status || "can_request") === "can_request",
+      canRespond: Boolean(relationship.canRespond) || relationship.status === "incoming_request",
+      canMessage: Boolean(relationship.canMessage) || relationship.status === "friends",
+    },
+  };
+}
+
+function normalizeFriendEntry(entry = {}) {
+  return {
+    friendshipId: entry.friendshipId || entry.id || "",
+    since: Number(entry.since || entry.createdAt || 0),
+    lastInteractionAt: Number(entry.lastInteractionAt || entry.updatedAt || 0),
+    user: normalizePublicUser(entry.user || {}),
+  };
+}
+
+function normalizeFriendRequest(request = {}) {
+  return {
+    id: String(request.id || request._id || ""),
+    fromUserId: String(request.fromUserId || ""),
+    toUserId: String(request.toUserId || ""),
+    status: request.status || "pending",
+    direction: request.direction || "",
+    createdAt: Number(request.createdAt || 0),
+    updatedAt: Number(request.updatedAt || 0),
+    user: normalizePublicUser(request.user || {}),
+  };
+}
+
+function renderFriendUserCard(userInput = {}, source = "search", entry = {}) {
+  const user = normalizePublicUser(userInput);
+  const subtitle = user.username ? `@${user.username}` : "AnonChat user";
+  const meta = user.online ? "Online now" : user.lastSeen ? `Last seen ${relativeTime(user.lastSeen)}` : "Offline";
+  const since = entry?.since ? `<span>Friends since ${escapeHtml(relativeTime(entry.since))}</span>` : "";
+
+  return `
+    <article class="friend-card" data-friend-user-id="${escapeAttr(user.id)}">
+      <div class="friend-card-main">
+        ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "friend-avatar")}
+        <div>
+          <strong>${escapeHtml(user.name)}</strong>
+          <small>${escapeHtml(subtitle)}</small>
+          <p>${escapeHtml(user.customStatus || user.about || meta)}</p>
+          <div class="friend-meta-row">
+            <span class="${user.online ? "online" : "offline"}">${escapeHtml(meta)}</span>
+            ${since}
+          </div>
+        </div>
+      </div>
+      <div class="friend-actions">
+        ${friendActionButtons(user, source)}
+      </div>
+    </article>
+  `;
+}
+
+function renderFriendRequestCard(requestInput = {}, type = "incoming") {
+  const request = normalizeFriendRequest(requestInput);
+  const user = request.user;
+  if (!user.id) return "";
+  const loading = type === "incoming"
+    ? isFriendActionLoading(["accept", "decline"], request.id)
+    : isFriendActionLoading(["cancel"], request.id);
+
+  return `
+    <article class="friend-request-card">
+      <div class="friend-card-main">
+        ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "friend-avatar")}
+        <div>
+          <strong>${escapeHtml(user.name)}</strong>
+          <small>${escapeHtml(user.username ? `@${user.username}` : "AnonChat user")}</small>
+          <p>${type === "incoming" ? "Wants to connect with you." : "Waiting for response."}</p>
+        </div>
+      </div>
+      <div class="friend-actions">
+        ${
+          type === "incoming"
+            ? `<button type="button" data-friend-action="accept" data-request-id="${escapeAttr(request.id)}" ${loading ? "disabled" : ""}>Accept</button>
+               <button class="ghost-btn small-action" type="button" data-friend-action="decline" data-request-id="${escapeAttr(request.id)}" ${loading ? "disabled" : ""}>Decline</button>`
+            : `<button class="ghost-btn small-action" type="button" data-friend-action="cancel" data-request-id="${escapeAttr(request.id)}" ${loading ? "disabled" : ""}>Cancel</button>`
+        }
+      </div>
+    </article>
+  `;
+}
+
+function friendActionButtons(user, source) {
+  const relationship = user.relationship || {};
+  const status = relationship.status || "can_request";
+
+  if (status === "friends") {
+    const disabled = isFriendActionLoading(["message"], user.id) ? "disabled" : "";
+    return `
+      <button type="button" data-friend-action="message" data-user-id="${escapeAttr(user.id)}" ${disabled}>Message</button>
+      <span class="friend-status-pill">Friend</span>
+    `;
+  }
+
+  if (status === "request_sent") {
+    const disabled = isFriendActionLoading(["cancel"], relationship.requestId) ? "disabled" : "";
+    return `<button class="ghost-btn small-action" type="button" data-friend-action="cancel" data-request-id="${escapeAttr(relationship.requestId)}" ${disabled}>Cancel Request</button>`;
+  }
+
+  if (status === "incoming_request") {
+    const disabled = isFriendActionLoading(["accept", "decline"], relationship.requestId) ? "disabled" : "";
+    return `
+      <button type="button" data-friend-action="accept" data-request-id="${escapeAttr(relationship.requestId)}" ${disabled}>Accept</button>
+      <button class="ghost-btn small-action" type="button" data-friend-action="decline" data-request-id="${escapeAttr(relationship.requestId)}" ${disabled}>Decline</button>
+    `;
+  }
+
+  const disabled = isFriendActionLoading(["add"], user.id) ? "disabled" : "";
+  return `<button type="button" data-friend-action="add" data-user-id="${escapeAttr(user.id)}" ${disabled}>Add Friend</button>`;
+}
+
+function friendActionKey(action, id) {
+  return `${action}:${id || "none"}`;
+}
+
+function isFriendActionLoading(actions = [], id = "") {
+  return actions.some((action) => state.friendActionLoadingId === friendActionKey(action, id));
+}
+
+async function loadFriendData(options = {}) {
+  if (!state.session?.token || isGuestSession() || isAdmin()) return;
+  if (state.friendsLoading && !options.force) return;
+
+  state.friendsLoading = true;
+  if (options.renderLoading && state.route === FRIENDS_ROUTE) renderFriendsPage();
+
+  try {
+    const [friendsData, requestsData] = await Promise.all([
+      api("/api/friends"),
+      api("/api/friends/requests"),
+    ]);
+
+    state.friends = (friendsData.friends || []).map(normalizeFriendEntry);
+    state.friendRequests = {
+      incoming: (requestsData.incoming || []).map(normalizeFriendRequest),
+      sent: (requestsData.sent || []).map(normalizeFriendRequest),
+    };
+    state.friendsLoaded = true;
+  } finally {
+    state.friendsLoading = false;
+    if (options.renderAfter && state.route === FRIENDS_ROUTE) renderFriendsPage();
+  }
+}
+
+async function searchFriendUsers(query = state.friendSearchQuery, options = {}) {
+  const value = cleanClientSearch(query);
+  state.friendSearchQuery = value;
+  if (!value || value.length < 2) {
+    state.friendSearchResults = [];
+    state.friendSearchLoading = false;
+    if (options.renderAfter && state.route === FRIENDS_ROUTE) renderFriendsPage();
+    return;
+  }
+
+  state.friendSearchLoading = true;
+  if (options.renderLoading && state.route === FRIENDS_ROUTE) renderFriendsPage();
+
+  try {
+    const data = await api(`/api/users/search?q=${encodeURIComponent(value)}`);
+    state.friendSearchResults = (data.users || []).map(normalizePublicUser);
+  } finally {
+    state.friendSearchLoading = false;
+    if (options.renderAfter !== false && state.route === FRIENDS_ROUTE) renderFriendsPage();
+  }
+}
+
+function cleanClientSearch(value) {
+  return String(value || "").trim().slice(0, 60);
+}
+
+function handleHomeViewInput(event) {
+  const friendSearchInput = event.target.closest("#friendSearchInput");
+  if (!friendSearchInput) return;
+
+  state.friendSearchQuery = friendSearchInput.value;
+  window.clearTimeout(friendSearchDebounce);
+
+  const query = cleanClientSearch(state.friendSearchQuery);
+  if (query.length < 2) {
+    if (state.friendSearchResults.length) {
+      state.friendSearchResults = [];
+      renderFriendsPage();
+      window.requestAnimationFrame(() => document.querySelector("#friendSearchInput")?.focus());
+    }
+    return;
+  }
+
+  friendSearchDebounce = window.setTimeout(() => {
+    searchFriendUsers(query, { renderAfter: true }).catch(handleApiError);
+  }, 280);
+}
+
+async function handleFriendAction(button) {
+  const action = button.dataset.friendAction;
+  const userId = button.dataset.userId || "";
+  const requestId = button.dataset.requestId || "";
+
+  if (action === "refresh") {
+    await loadFriendData({ force: true, renderAfter: true });
+    if (state.friendSearchQuery.trim().length >= 2) await searchFriendUsers(state.friendSearchQuery, { renderAfter: true });
+    toast("Friends refreshed.");
+    return;
+  }
+
+  if (action === "search") {
+    await searchFriendUsers(state.friendSearchQuery, { renderLoading: true, renderAfter: true });
+    return;
+  }
+
+  if (action === "message") {
+    await startDmWithUser(userId);
+    return;
+  }
+
+  const loadingKey = friendActionKey(action, requestId || userId);
+  state.friendActionLoadingId = loadingKey;
+  renderFriendsPage();
+
+  try {
+    if (action === "add") {
+      await api("/api/friends/requests", {
+        method: "POST",
+        body: { targetUserId: userId },
+      });
+      toast("Friend request sent.");
+    } else if (action === "accept" || action === "decline") {
+      await api(`/api/friends/requests/${encodeURIComponent(requestId)}`, {
+        method: "PATCH",
+        body: { action },
+      });
+      toast(action === "accept" ? "Friend request accepted." : "Friend request declined.");
+    } else if (action === "cancel") {
+      await api(`/api/friends/requests/${encodeURIComponent(requestId)}`, {
+        method: "DELETE",
+      });
+      toast("Friend request cancelled.");
+    }
+
+    await loadFriendData({ force: true });
+    if (state.friendSearchQuery.trim().length >= 2) await searchFriendUsers(state.friendSearchQuery, { renderAfter: false });
+  } finally {
+    state.friendActionLoadingId = "";
+    if (state.route === FRIENDS_ROUTE) renderFriendsPage();
+  }
+}
+
+function findFriendByUserId(userId) {
+  return (state.friends || []).find((entry) => String(entry.user?.id || "") === String(userId || ""));
+}
+
+function normalizeDmThread(thread = {}) {
+  const participant = normalizePublicUser(thread.participant || {});
+  const id = String(thread.id || thread._id || "");
+
+  return {
+    id,
+    participantIds: Array.isArray(thread.participantIds) ? thread.participantIds.map(String) : [],
+    participant,
+    lastMessageId: String(thread.lastMessageId || ""),
+    lastMessageText: thread.lastMessageText || "",
+    lastMessageAt: Number(thread.lastMessageAt || thread.updatedAt || thread.createdAt || 0),
+    unreadCount: Math.max(0, Number(thread.unreadCount || 0)),
+    createdAt: Number(thread.createdAt || 0),
+    updatedAt: Number(thread.updatedAt || 0),
+    lastMessage: thread.lastMessage ? normalizeDmMessage(thread.lastMessage) : null,
+  };
+}
+
+function normalizeDmMessage(message = {}) {
+  const id = String(message.id || message._id || message.clientTempId || message.createdAt || Date.now());
+  const createdAt = typeof message.createdAt === "number"
+    ? message.createdAt
+    : new Date(message.createdAt || Date.now()).getTime();
+
+  return {
+    id,
+    _id: message._id,
+    clientTempId: String(message.clientTempId || ""),
+    threadId: String(message.threadId || ""),
+    senderId: String(message.senderId || message.authorId || ""),
+    recipientId: String(message.recipientId || ""),
+    participantIds: Array.isArray(message.participantIds) ? message.participantIds.map(String) : [],
+    text: message.text || "",
+    type: message.type || (message.attachment ? "media" : "text"),
+    attachment: message.attachment || null,
+    replyTo: message.replyTo || null,
+    delivery: normalizeDelivery(message.delivery || {}),
+    hiddenForUserIds: Array.isArray(message.hiddenForUserIds) ? message.hiddenForUserIds.map(String) : [],
+    deletedAt: message.deletedAt || null,
+    editedAt: message.editedAt || null,
+    reported: Boolean(message.reported),
+    createdAt: Number.isNaN(createdAt) ? Date.now() : createdAt,
+    updatedAt: Number(message.updatedAt || 0),
+    localStatus: message.localStatus || "",
+    submitKey: message.submitKey || "",
+  };
+}
+
+function dmMessageIdentityValues(message = {}) {
+  return new Set([
+    message.id,
+    message._id,
+    message.clientTempId,
+  ].map((value) => String(value || "")).filter(Boolean));
+}
+
+function dmMessagesForThread(threadId) {
+  return (state.dmMessagesByThread[String(threadId || "")] || []).map(normalizeDmMessage);
+}
+
+function upsertDmThread(threadInput) {
+  const thread = normalizeDmThread(threadInput);
+  if (!thread.id) return null;
+  const existingIndex = state.dmThreads.findIndex((item) => String(item.id) === String(thread.id));
+  if (existingIndex > -1) {
+    state.dmThreads[existingIndex] = {
+      ...state.dmThreads[existingIndex],
+      ...thread,
+      participant: thread.participant?.id ? thread.participant : state.dmThreads[existingIndex].participant,
+    };
+  } else {
+    state.dmThreads.push(thread);
+  }
+  state.dmThreads = state.dmThreads
+    .filter((item) => item.id)
+    .sort((a, b) => Number(b.lastMessageAt || b.updatedAt || 0) - Number(a.lastMessageAt || a.updatedAt || 0));
+  return thread;
+}
+
+function upsertDmMessage(threadId, messageInput) {
+  const normalized = normalizeDmMessage({ ...messageInput, threadId: messageInput?.threadId || threadId });
+  if (!normalized.id) return;
+  const key = String(threadId || normalized.threadId || "");
+  const list = dmMessagesForThread(key);
+  const incomingIds = dmMessageIdentityValues(normalized);
+  const existingIndex = list.findIndex((item) => {
+    const ids = dmMessageIdentityValues(item);
+    return [...incomingIds].some((id) => ids.has(id));
+  });
+
+  if (existingIndex > -1) {
+    list[existingIndex] = {
+      ...list[existingIndex],
+      ...normalized,
+      localStatus: normalized.localStatus || "",
+    };
+  } else {
+    list.push(normalized);
+  }
+
+  state.dmMessagesByThread = {
+    ...state.dmMessagesByThread,
+    [key]: list.sort((a, b) => Number(a.createdAt) - Number(b.createdAt)),
+  };
+}
+
+function mergeDmMessageLists(...lists) {
+  const merged = [];
+  lists.flat().map(normalizeDmMessage).forEach((message) => {
+    const incomingIds = dmMessageIdentityValues(message);
+    const existingIndex = merged.findIndex((item) => {
+      const ids = dmMessageIdentityValues(item);
+      return [...incomingIds].some((id) => ids.has(id));
+    });
+    if (existingIndex > -1) {
+      merged[existingIndex] = {
+        ...merged[existingIndex],
+        ...message,
+        localStatus: message.localStatus || "",
+      };
+    } else {
+      merged.push(message);
+    }
+  });
+  return merged.sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
+}
+
+function updateDmThreadUnread(threadId, unreadCount = 0) {
+  state.dmThreads = state.dmThreads.map((thread) => (
+    String(thread.id) === String(threadId)
+      ? { ...thread, unreadCount: Math.max(0, Number(unreadCount || 0)) }
+      : thread
+  ));
+}
+
+function findDmThread(threadId = activeDmThreadId()) {
+  return state.dmThreads.find((thread) => String(thread.id) === String(threadId || "")) || null;
+}
+
+async function loadDmThreads(options = {}) {
+  if (!state.session?.token || isGuestSession() || isAdmin()) return [];
+  if (state.dmThreadsLoading && !options.force) return state.dmThreads;
+
+  state.dmThreadsLoading = true;
+  try {
+    const data = await api("/api/dms/threads");
+    state.dmThreads = (data.threads || []).map(normalizeDmThread);
+    state.dmThreadsLoaded = true;
+    return state.dmThreads;
+  } finally {
+    state.dmThreadsLoading = false;
+    if (options.renderAfter) {
+      renderSidebarDirectMessages();
+      renderMobileAppMenuDms();
+      renderNotifications();
+      if (state.route === NOTIFICATIONS_ROUTE) renderNotificationsPage();
+      if (isDmRoute()) renderDmThreadSummary();
+    }
+  }
+}
+
+async function loadDmMessagesForThread(threadId, options = {}) {
+  const id = String(threadId || "");
+  if (!id || !state.session?.token || isGuestSession() || isAdmin()) return;
+  if (state.dmMessagesLoading && !options.force) return;
+  const loadedAt = Number(state.dmMessagesLoadedAt[id] || 0);
+  if (!options.force && loadedAt && Date.now() - loadedAt < 5000) return;
+
+  state.dmMessagesLoading = true;
+  if (options.renderLoading && activeDmThreadId() === id) renderDmMessages({ preserveScroll: true });
+
+  try {
+    const data = await api(`/api/dms/threads/${encodeURIComponent(id)}/messages`);
+    if (data.thread) upsertDmThread(data.thread);
+    const loadedMessages = (data.messages || []).map(normalizeDmMessage);
+    state.dmMessagesByThread = {
+      ...state.dmMessagesByThread,
+      [id]: mergeDmMessageLists(dmMessagesForThread(id), loadedMessages),
+    };
+    state.dmMessagesLoadedAt = {
+      ...state.dmMessagesLoadedAt,
+      [id]: Date.now(),
+    };
+  } finally {
+    state.dmMessagesLoading = false;
+    if (options.renderAfter && activeDmThreadId() === id) {
+      renderDmThreadSummary();
+      renderDmMessages({ preserveScroll: true });
+    }
+    renderSidebarDirectMessages();
+  }
+}
+
+async function startDmWithUser(userId) {
+  const id = String(userId || "").trim();
+  if (!id) return;
+  const loadingKey = friendActionKey("message", id);
+  state.friendActionLoadingId = loadingKey;
+  if (state.route === FRIENDS_ROUTE) renderFriendsPage();
+
+  try {
+    const data = await api("/api/dms/threads", {
+      method: "POST",
+      body: { targetUserId: id },
+    });
+    const thread = data.thread ? upsertDmThread(data.thread) : null;
+    if (!thread?.id) throw new Error("Personal chat could not be opened.");
+    await loadDmMessagesForThread(thread.id, { force: true });
+    openDmThread(thread.id);
+    closeMobileSidebar();
+  } finally {
+    state.friendActionLoadingId = "";
+    if (state.route === FRIENDS_ROUTE) renderFriendsPage();
+  }
+}
+
+function openDmThread(threadId) {
+  const id = String(threadId || "").trim();
+  if (!id) return;
+  resetMessageSearch({ render: false });
+  state.replyToMessageId = null;
+  state.editingMessageId = null;
+  state.typing = state.typing.filter((item) => !item.dm || String(item.threadId) === id);
+  navigateTo(`${DM_ROUTE_PREFIX}/${encodeURIComponent(id)}`);
+}
+
+function dmMessageSubmitKey(text, attachment, replyToMessageId, threadId = activeDmThreadId()) {
+  return JSON.stringify({
+    threadId,
+    text,
+    replyToMessageId: replyToMessageId || "",
+    attachment: attachment
+      ? {
+          name: attachment.name,
+          size: attachment.size,
+          url: attachment.url || attachment.dataUrl || "",
+        }
+      : null,
+  });
+}
+
+function createOptimisticDmMessage({ threadId, text, attachment, replyToMessageId, clientTempId }) {
+  const user = state.session.user;
+  const thread = findDmThread(threadId);
+  const recipientId = thread?.participant?.id || "";
+  const replyTo = replyToMessageId
+    ? dmMessagesForThread(threadId).find((message) => String(message.id) === String(replyToMessageId))
+    : null;
+  const createdAt = Date.now();
+
+  return normalizeDmMessage({
+    id: clientTempId || `pending_dm_${createdAt}_${Math.random().toString(36).slice(2, 8)}`,
+    clientTempId,
+    threadId,
+    senderId: user.id,
+    recipientId,
+    participantIds: [user.id, recipientId].filter(Boolean),
+    text,
+    type: attachment ? "media" : "text",
+    attachment,
+    replyTo: replyTo ? {
+      id: replyTo.id,
+      author: String(replyTo.senderId) === String(user.id) ? "You" : thread?.participant?.name || "Friend",
+      text: replyTo.text || replyTo.attachment?.name || "Attachment",
+    } : null,
+    delivery: {
+      sentAt: createdAt,
+      deliveredTo: [],
+      seenBy: [user.id],
+    },
+    createdAt,
+    localStatus: "pending",
+    submitKey: dmMessageSubmitKey(text, attachment, replyToMessageId, threadId),
+  });
+}
+
+async function handleDmMessageSubmit({ text, attachment }) {
+  const threadId = activeDmThreadId();
+  if (!threadId) {
+    toast("Choose a friend to start a personal chat.");
+    return;
+  }
+
+  const submitKey = dmMessageSubmitKey(text, attachment, state.replyToMessageId, threadId);
+  if (isSubmittingMessage && submitKey === lastMessageSubmitKey) return;
+  isSubmittingMessage = true;
+  lastMessageSubmitKey = submitKey;
+  window.clearTimeout(messageSubmitCooldownTimer);
+
+  let clientTempId = "";
+  const replyToMessageId = state.replyToMessageId;
+
+  try {
+    if (state.editingMessageId) {
+      state.editingMessageId = null;
+      toast("Editing is available for room messages only right now.");
+    }
+
+    clientTempId = createClientTempId();
+    const pendingMessage = createOptimisticDmMessage({ threadId, text, attachment, replyToMessageId, clientTempId });
+    upsertDmMessage(threadId, pendingMessage);
+
+    elements.messageInput.value = "";
+    state.replyToMessageId = null;
+    clearAttachment();
+    updateComposerAction();
+    renderDmMessages({ preserveScroll: true });
+    sendTyping(false);
+
+    const result = await api(`/api/dms/threads/${encodeURIComponent(threadId)}/messages`, {
+      method: "POST",
+      body: {
+        token: state.session.token,
+        text,
+        replyToMessageId,
+        attachment,
+        clientTempId,
+      },
+    });
+
+    if (result.thread) upsertDmThread(result.thread);
+    if (result.message) {
+      upsertDmMessage(threadId, { ...result.message, clientTempId: result.message.clientTempId || clientTempId });
+      renderDmMessages({ preserveScroll: true });
+      renderDmThreadSummary();
+      renderSidebarDirectMessages();
+    }
+  } catch (error) {
+    console.error("DM send failed:", error);
+    const failed = dmMessagesForThread(threadId).find((message) =>
+      message.localStatus === "pending" &&
+      (message.clientTempId === clientTempId || message.submitKey === submitKey)
+    );
+    if (failed) {
+      failed.localStatus = "failed";
+      state.dmMessagesByThread = {
+        ...state.dmMessagesByThread,
+        [threadId]: dmMessagesForThread(threadId).map((message) => (
+          String(message.id) === String(failed.id) ? failed : message
+        )),
+      };
+      renderDmMessages({ preserveScroll: true });
+    }
+    if (isSessionExpiredError(error)) {
+      handleApiError(error);
+    } else {
+      toast("Personal message failed to send. Try again.");
+    }
+  } finally {
+    isSubmittingMessage = false;
+    messageSubmitCooldownTimer = window.setTimeout(() => {
+      if (lastMessageSubmitKey === submitKey) lastMessageSubmitKey = "";
+    }, 800);
+  }
+}
+
+function renderDmThreadSummary() {
+  const threadId = activeDmThreadId();
+  const thread = findDmThread(threadId);
+  if (!thread && !state.dmThreadsLoading) {
+    loadDmThreads({ force: true, renderAfter: true }).catch(handleApiError);
+  }
+  const participant = thread?.participant || {};
+  const name = participant.name || "Personal Chat";
+  elements.activeRoomName.textContent = name;
+  if (elements.activeRoomIcon) elements.activeRoomIcon.textContent = initials(name);
+  const online = participant.online || presenceStatusForUser(participant.id).online;
+  elements.activeRoomMeta.textContent = online ? "Online now" : "Private DM";
+  if (elements.roomCategory) elements.roomCategory.textContent = "Direct Message";
+  if (elements.topbarOnlineCount) elements.topbarOnlineCount.textContent = online ? "1" : "0";
+  renderNotifications();
+  updateCallButtonsAvailability();
+}
+
+function renderDmMessages(options = {}) {
+  const threadId = activeDmThreadId();
+  const feed = elements.chatFeed;
+  if (!feed || !threadId) return;
+  const previousScrollTop = feed.scrollTop;
+  const previousScrollHeight = feed.scrollHeight;
+  const wasNearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 96;
+  const query = String(state.messageSearchQuery || "").trim().toLowerCase();
+  const hasSearchQuery = query.length > 0;
+  const messages = dmMessagesForThread(threadId)
+    .filter((message) => !message.hiddenForUserIds.map(String).includes(String(state.session?.user?.id || "")))
+    .filter((message) => {
+      if (!hasSearchQuery) return true;
+      return `${message.text || ""} ${message.attachment?.name || ""}`.toLowerCase().includes(query);
+    })
+    .sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
+
+  updateMessageSearchCount(messages.length);
+
+  if (!state.dmMessagesLoadedAt[threadId] && !state.dmMessagesLoading) {
+    loadDmMessagesForThread(threadId, { renderAfter: true }).catch(handleApiError);
+  }
+
+  if (state.dmMessagesLoading && !messages.length) {
+    feed.replaceChildren(createChatFeedNode({
+      key: "dm-loading",
+      html: `<div class="empty-state" data-render-key="dm-loading">Loading personal chat...</div>`,
+    }, "dm-loading"));
+    return;
+  }
+
+  if (!messages.length) {
+    const emptyText = hasSearchQuery ? "No matching messages found." : "No personal messages yet. Say hi to start the conversation.";
+    const empty = document.createElement("div");
+    empty.className = "empty-state dm-empty-state";
+    empty.dataset.renderKey = "dm-empty";
+    empty.textContent = emptyText;
+    feed.replaceChildren(empty);
+    updateScrollToBottomButton();
+    if (options.preserveScroll) feed.scrollTop = previousScrollTop;
+    return;
+  }
+
+  let lastDateKey = "";
+  let previousMessage = null;
+  const descriptors = [];
+  messages.forEach((message) => {
+    const dateKey = dateSeparatorKey(message.createdAt);
+    if (dateKey !== lastDateKey) {
+      descriptors.push({
+        key: `dm-date:${dateKey}`,
+        html: `<div class="date-separator">${escapeHtml(dateKey)}</div>`,
+      });
+    }
+    const grouped =
+      previousMessage &&
+      dateKey === lastDateKey &&
+      String(previousMessage.senderId) === String(message.senderId) &&
+      Number(message.createdAt) - Number(previousMessage.createdAt) <= 2 * 60 * 1000;
+    descriptors.push({
+      key: `dm-message:${stableDmMessageRenderKey(message)}`,
+      messageId: message.id,
+      html: renderDmMessage(message, grouped),
+    });
+    lastDateKey = dateKey;
+    previousMessage = message;
+  });
+
+  const changedNodes = reconcileChatFeed(descriptors, { force: Boolean(options.force) });
+  const heightDelta = feed.scrollHeight - previousScrollHeight;
+  if (options.preserveVisualOffset) {
+    feed.scrollTop = previousScrollTop + heightDelta;
+  } else if (wasNearBottom || !options.preserveScroll) {
+    feed.scrollTop = feed.scrollHeight;
+  } else {
+    feed.scrollTop = previousScrollTop;
+  }
+
+  changedNodes.forEach((node) => attachLightboxToImages(node));
+  markDmMessagesSeen(messages);
+  updateScrollToBottomButton();
+}
+
+function stableDmMessageRenderKey(message = {}) {
+  return String(message.clientTempId || message.id || message._id || message.createdAt || "");
+}
+
+function dmDeliveryLabel(message) {
+  if (message.localStatus === "pending") return "Sending...";
+  if (message.localStatus === "failed") return "Failed";
+  const currentUserId = String(state.session?.user?.id || "");
+  const delivery = normalizeDelivery(message.delivery);
+  const seenByOther = delivery.seenBy.some((userId) => String(userId) !== currentUserId);
+  const deliveredToOther = delivery.deliveredTo.some((userId) => String(userId) !== currentUserId);
+  if (seenByOther) return "\u2713\u2713 Seen";
+  if (deliveredToOther) return "\u2713\u2713 Delivered";
+  return "\u2713 Sent";
+}
+
+function renderDmMessage(message, grouped = false) {
+  const user = state.session.user;
+  const thread = findDmThread(message.threadId);
+  const participant = thread?.participant || {};
+  const mine = String(message.senderId) === String(user.id);
+  const authorName = mine ? "You" : participant.name || "Friend";
+  const deleted = Boolean(message.deletedAt);
+  const delivery = normalizeDelivery(message.delivery);
+  const deliveryClass = message.localStatus === "failed"
+    ? "failed"
+    : message.localStatus === "pending"
+      ? "pending"
+      : delivery.seenBy.length > 1 || (!mine && delivery.seenBy.length)
+        ? "seen"
+        : delivery.deliveredTo.length
+          ? "delivered"
+          : "sent";
+  const deliveryStatus = mine ? `<span class="delivery-status ${deliveryClass}">${dmDeliveryLabel(message)}</span>` : "";
+  const replyBlock = message.replyTo && !deleted
+    ? `<div class="message-reply"><strong>${escapeHtml(message.replyTo.author || "Message")}</strong><span>${escapeHtml(message.replyTo.text || "Attachment")}</span></div>`
+    : "";
+  const bodyBlock = deleted
+    ? `<p class="message-text deleted-message">This message was deleted</p>`
+    : `<p class="message-text">${highlightedMessageText(message.text)}</p>`;
+  const avatarAttrs = !mine && participant.id
+    ? `data-profile-author-id="${escapeAttr(participant.id)}" data-author-id="${escapeAttr(participant.id)}" data-author="${escapeAttr(authorName)}"`
+    : "";
+
+  return `
+    <article class="message dm-message ${mine ? "mine" : ""} ${grouped ? "grouped" : ""}" data-message-id="${escapeAttr(message.id)}" data-dm-message-id="${escapeAttr(message.id)}">
+      ${grouped ? `<span class="avatar avatar-spacer" aria-hidden="true"></span>` : renderAvatar(authorName, mine ? user.avatarColor : participant.avatarColor, mine ? user.avatarDataUrl : participant.avatarDataUrl, "msg-avatar", avatarAttrs)}
+      <div class="message-card">
+        <div class="message-top">
+          <span class="message-sender msg-author">${escapeHtml(authorName)}</span>
+          <span>${relativeTime(message.createdAt)}</span>
+          ${!mine ? `<span class="presence-chip ${presenceStatusForUser(participant.id).online ? "online" : "offline"}">${escapeHtml(presenceLabel(participant.id))}</span>` : ""}
+          ${deliveryStatus}
+        </div>
+        ${replyBlock}
+        ${bodyBlock}
+        ${deleted ? "" : renderAttachment(message.attachment)}
+      </div>
+    </article>
+  `;
+}
+
+function markDmMessagesSeen(messages = []) {
+  if (!socket?.connected || !state.session?.token || isAdmin()) return;
+  const threadId = activeDmThreadId();
+  if (!threadId) return;
+  const currentUserId = String(state.session.user.id || "");
+  const hasUnreadFromOther = messages.some((message) => (
+    String(message.senderId) !== currentUserId &&
+    !normalizeDelivery(message.delivery).seenBy.map(String).includes(currentUserId)
+  ));
+  if (!hasUnreadFromOther) return;
+  socket.emit("dm:seen", {
+    token: state.session.token,
+    threadId,
+  });
+}
+
+function handleDmThreadRealtime(payload = {}) {
+  if (payload.thread) upsertDmThread(payload.thread);
+  renderSidebarDirectMessages();
+  renderMobileAppMenuDms();
+  renderNotifications();
+  if (state.route === NOTIFICATIONS_ROUTE) renderNotificationsPage();
+  if (isDmRoute() && activeDmThreadId() === String(payload.thread?.id || "")) renderDmThreadSummary();
+}
+
+function handleDmMessageRealtime(payload = {}) {
+  const thread = payload.thread ? upsertDmThread(payload.thread) : null;
+  const message = payload.message ? normalizeDmMessage(payload.message) : null;
+  const threadId = String(message?.threadId || thread?.id || "");
+  if (!threadId || !message?.id) return;
+
+  const beforeCount = dmMessagesForThread(threadId).length;
+  upsertDmMessage(threadId, message);
+  const active = isDmRoute() && activeDmThreadId() === threadId;
+  const mine = String(message.senderId) === String(state.session?.user?.id);
+
+  if (active) {
+    state.typing = state.typing.filter((item) => !(item.dm && String(item.threadId) === threadId && String(item.userId) === String(message.senderId)));
+    updateDmThreadUnread(threadId, 0);
+    renderDmThreadSummary();
+    renderDmMessages({ preserveScroll: true });
+    renderTypingIndicator();
+    if (!mine) markDmMessagesSeen(dmMessagesForThread(threadId));
+  } else if (!mine && dmMessagesForThread(threadId).length > beforeCount) {
+    const name = thread?.participant?.name || "Friend";
+    toast(`New message from ${name}`);
+  }
+
+  renderSidebarDirectMessages();
+  renderMobileAppMenuDms();
+  renderNotifications();
+  if (state.route === NOTIFICATIONS_ROUTE) renderNotificationsPage();
+}
+
+function handleDmSeenRealtime(payload = {}) {
+  const threadId = String(payload.threadId || payload.thread?.id || "");
+  const userId = String(payload.userId || "");
+  if (!threadId || !userId) return;
+  if (payload.thread) upsertDmThread(payload.thread);
+
+  const messages = dmMessagesForThread(threadId).map((message) => {
+    if (String(message.senderId) === userId) return message;
+    return {
+      ...message,
+      delivery: {
+        ...normalizeDelivery(message.delivery),
+        deliveredTo: uniqueList([...normalizeDelivery(message.delivery).deliveredTo, userId]),
+        seenBy: uniqueList([...normalizeDelivery(message.delivery).seenBy, userId]),
+      },
+    };
+  });
+  state.dmMessagesByThread = {
+    ...state.dmMessagesByThread,
+    [threadId]: messages,
+  };
+  if (isDmRoute() && activeDmThreadId() === threadId) renderDmMessages({ preserveScroll: true });
+  renderSidebarDirectMessages();
+  renderMobileAppMenuDms();
+  renderNotifications();
+  if (state.route === NOTIFICATIONS_ROUTE) renderNotificationsPage();
+}
+
+function handleFriendRealtimeEvent(payload = {}, fallbackType = "friend-update") {
+  if (isAdmin() || isGuestSession()) return;
+  const notification = normalizeFriendNotification(payload.notification || {}, fallbackType);
+  if (notification) {
+    state.notifications = [
+      notification,
+      ...(state.notifications || []).filter((item) => String(item.id) !== String(notification.id)),
+    ].slice(0, 80);
+    toast(notification.body || notification.message || "Friend request updated.");
+  }
+
+  loadFriendData({ force: true })
+    .then(() => {
+      if (state.friendSearchQuery.trim().length >= 2) {
+        return searchFriendUsers(state.friendSearchQuery, { renderAfter: false });
+      }
+      return null;
+    })
+    .then(() => {
+      renderNotifications();
+      if (state.route === FRIENDS_ROUTE) renderFriendsPage();
+      if (state.route === NOTIFICATIONS_ROUTE) renderNotificationsPage();
+    })
+    .catch((error) => console.warn("Friend realtime refresh failed:", error.message));
+}
+
+function normalizeFriendNotification(notification = {}, fallbackType = "friend-update") {
+  const message = String(notification.message || notification.body || "").trim().slice(0, 180);
+  if (!message && !notification.title) return null;
+
+  return {
+    id: String(notification.id || `${fallbackType}-${Date.now()}`),
+    type: notification.type || fallbackType,
+    title: notification.title || "Friend request",
+    body: message || "Friend request updated.",
+    text: message || "Friend request updated.",
+    createdAt: Number(notification.createdAt || Date.now()),
+    fromUserId: notification.fromUserId || "",
+    requestId: notification.requestId || "",
+  };
 }
 
 function renderMyRoomsPage() {
@@ -5359,8 +6511,15 @@ function renderNotificationsPage() {
 }
 
 function renderNotificationItem(item) {
+  const targetAttrs = [
+    `data-notification-id="${escapeAttr(item.id)}"`,
+    `data-notification-created-at="${escapeAttr(item.createdAt)}"`,
+    item.roomId ? `data-notification-room-id="${escapeAttr(item.roomId)}"` : "",
+    item.dmThreadId ? `data-notification-dm-thread-id="${escapeAttr(item.dmThreadId)}"` : "",
+    item.type?.startsWith?.("friend") ? `data-notification-friends="true"` : "",
+  ].filter(Boolean).join(" ");
   return `
-    <article class="notification-page-item ${item.unread ? "unread" : ""}" data-notification-type="${escapeAttr(item.type)}">
+    <article class="notification-page-item ${item.unread ? "unread" : ""}" data-notification-type="${escapeAttr(item.type)}" ${targetAttrs} role="button" tabindex="0">
       <span class="notification-item-icon" aria-hidden="true">${escapeHtml(item.icon)}</span>
       <div>
         <strong>${escapeHtml(item.title)}</strong>
@@ -5384,6 +6543,21 @@ function notificationItems() {
       body: notification.body || notification.text || "You have a new notification.",
       createdAt: Number(notification.createdAt || Date.now()),
       roomId: notification.roomId || "",
+      dmThreadId: notification.dmThreadId || "",
+    });
+  });
+
+  (state.dmThreads || []).forEach((thread) => {
+    const unread = Number(thread.unreadCount || 0);
+    if (!unread) return;
+    const name = thread.participant?.name || "Friend";
+    items.push({
+      id: `dm-unread-${thread.id}`,
+      type: "dm",
+      title: name,
+      body: `${numberText(unread)} unread personal message${unread === 1 ? "" : "s"}.`,
+      createdAt: Number(thread.lastMessageAt || thread.updatedAt || Date.now()),
+      dmThreadId: thread.id,
     });
   });
 
@@ -5424,6 +6598,8 @@ function notificationItems() {
 }
 
 function notificationIcon(type) {
+  if (String(type || "").startsWith("friend")) return "FR";
+  if (type === "dm") return "DM";
   if (type === "announcement") return "AN";
   if (type === "invite") return "IN";
   return "SY";
@@ -5437,6 +6613,16 @@ function notificationReadAt() {
 function markAllNotificationsRead() {
   const userId = state.session?.user?.id || "anonymous";
   localStorage.setItem(`${NOTIFICATION_READ_KEY}:${userId}`, String(Date.now()));
+  renderNotifications();
+  if (state.route === NOTIFICATIONS_ROUTE) renderNotificationsPage();
+}
+
+function markNotificationsReadThrough(timestamp) {
+  const userId = state.session?.user?.id || "anonymous";
+  const key = `${NOTIFICATION_READ_KEY}:${userId}`;
+  const current = Number(localStorage.getItem(key) || 0);
+  const next = Math.max(current, Number(timestamp || Date.now()));
+  localStorage.setItem(key, String(next));
   renderNotifications();
   if (state.route === NOTIFICATIONS_ROUTE) renderNotificationsPage();
 }
@@ -5516,7 +6702,9 @@ function unreadCount(roomId) {
 }
 
 function totalUnreadCount() {
-  return getVisibleRooms().reduce((sum, room) => sum + unreadCount(room.id), 0);
+  const roomUnread = getVisibleRooms().reduce((sum, room) => sum + unreadCount(room.id), 0);
+  const dmUnread = (state.dmThreads || []).reduce((sum, thread) => sum + Math.max(0, Number(thread.unreadCount || 0)), 0);
+  return roomUnread + dmUnread;
 }
 
 function renderNotifications() {
@@ -5997,6 +7185,7 @@ function renderMobileAppMenuRooms() {
 
   if (!rooms.length) {
     elements.mobileMenuRooms.innerHTML = `<div class="menu-empty-state">No rooms available</div>`;
+    renderMobileAppMenuDms();
     return;
   }
 
@@ -6011,6 +7200,38 @@ function renderMobileAppMenuRooms() {
           <small>${escapeHtml(privateLabel)} room</small>
         </span>
         ${active ? `<em class="room-current">Current</em>` : ""}
+      </button>
+    `;
+  }).join("");
+  renderMobileAppMenuDms();
+}
+
+function renderMobileAppMenuDms() {
+  if (!elements.mobileMenuDms) return;
+  const threads = (state.dmThreads || []).slice(0, 8);
+
+  if (!threads.length) {
+    elements.mobileMenuDms.innerHTML = `
+      <div class="menu-empty-state">
+        ${state.dmThreadsLoading ? "Loading personal chats..." : "No personal chats yet"}
+      </div>
+    `;
+    return;
+  }
+
+  elements.mobileMenuDms.innerHTML = threads.map((thread) => {
+    const person = thread.participant || {};
+    const active = isDmRoute() && activeDmThreadId() === String(thread.id);
+    const unread = Number(thread.unreadCount || 0);
+    const preview = thread.lastMessageText || "Personal chat";
+    return `
+      <button type="button" class="${active ? "active" : ""} ${unread ? "unread" : ""}" data-mobile-dm-thread-id="${escapeAttr(thread.id)}">
+        ${renderAvatar(person.name || "Friend", person.avatarColor, person.avatarDataUrl, "room-icon")}
+        <span>
+          <strong>${escapeHtml(person.name || "Friend")}</strong>
+          <small>${escapeHtml(truncateText(preview, 34))}</small>
+        </span>
+        ${unread ? `<em class="room-current dm-current">${numberText(unread)}</em>` : active ? `<em class="room-current">Current</em>` : ""}
       </button>
     `;
   }).join("");
@@ -6031,6 +7252,9 @@ async function openMobileAppMenu() {
 
   if (!state.myRoomsLoaded && !state.myRoomsLoading) {
     loadMyRooms().then(renderMobileAppMenuRooms).catch(() => {});
+  }
+  if (!state.dmThreadsLoaded && !state.dmThreadsLoading) {
+    loadDmThreads({ renderAfter: true }).then(renderMobileAppMenuDms).catch(() => {});
   }
 }
 
@@ -6069,6 +7293,13 @@ function handleMobileAppMenuClick(event) {
     return;
   }
 
+  const dmButton = event.target.closest("[data-mobile-dm-thread-id]");
+  if (dmButton) {
+    openDmThread(dmButton.dataset.mobileDmThreadId);
+    closeMobileAppMenu();
+    return;
+  }
+
   const actionButton = event.target.closest("[data-mobile-menu-action]");
   if (!actionButton) return;
 
@@ -6079,6 +7310,8 @@ function handleMobileAppMenuClick(event) {
     navigateTo(DASHBOARD_ROUTE);
   } else if (action === "chat") {
     handleJoinRoom(state.activeRoomId || getVisibleRooms()[0]?.id || "general");
+  } else if (action === "friends") {
+    navigateTo(FRIENDS_ROUTE);
   } else if (action === "my-rooms") {
     navigateTo(MY_ROOMS_ROUTE);
   } else if (action === "create-private") {
@@ -6160,6 +7393,8 @@ function handleDashboardMenuClick(event) {
     render();
   } else if (action === "join-public") {
     handleJoinRoom(state.activeRoomId || getVisibleRooms()[0]?.id || "general");
+  } else if (action === "friends") {
+    navigateTo(FRIENDS_ROUTE);
   } else if (action === "profile") {
     navigateTo(PROFILE_ROUTE);
   } else if (action === "create-private") {
@@ -6576,6 +7811,7 @@ function canEnterRoom(room = {}) {
 function handleJoinRoom(roomId) {
   const room = findRoomById(roomId);
   if (!room) return;
+  state.typing = state.typing.filter((item) => !item.dm);
 
   if (roomRequiresPassword(room) && !roomUnlockedForClient(room)) {
     openRoomPasswordModal(room.id);
@@ -6688,9 +7924,29 @@ function switchActiveRoom(roomId, options = {}) {
 }
 
 async function handleHomeViewClick(event) {
+  const friendAction = event.target.closest("[data-friend-action]");
+  if (friendAction) {
+    await handleFriendAction(friendAction);
+    return;
+  }
+
   const notificationAction = event.target.closest("[data-notification-action]");
   if (notificationAction?.dataset.notificationAction === "mark-all-read") {
     markAllNotificationsRead();
+    return;
+  }
+
+  const notificationItem = event.target.closest("[data-notification-id]");
+  if (notificationItem) {
+    const createdAt = Number(notificationItem.dataset.notificationCreatedAt || Date.now());
+    markNotificationsReadThrough(createdAt);
+    if (notificationItem.dataset.notificationDmThreadId) {
+      openDmThread(notificationItem.dataset.notificationDmThreadId);
+    } else if (notificationItem.dataset.notificationRoomId) {
+      handleJoinRoom(notificationItem.dataset.notificationRoomId);
+    } else if (notificationItem.dataset.notificationFriends === "true") {
+      navigateTo(FRIENDS_ROUTE);
+    }
     return;
   }
 
@@ -6750,6 +8006,12 @@ async function handleHomeViewClick(event) {
 function handleHomeViewKeydown(event) {
   if (!["Enter", " "].includes(event.key)) return;
   if (event.target.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
+  const notificationItem = event.target.closest("[data-notification-id]");
+  if (notificationItem) {
+    event.preventDefault();
+    notificationItem.click();
+    return;
+  }
   const roomCard = event.target.closest(".home-room-card[data-home-room-id]");
   if (!roomCard) return;
   event.preventDefault();
@@ -7287,6 +8549,10 @@ function isBlockedUserId(userId) {
 }
 
 function renderMessages(options = {}) {
+  if (isDmRoute()) {
+    renderDmMessages(options);
+    return;
+  }
   const activeRoom = getActiveRoom();
   const currentUserId = state.session?.user?.id;
   const feed = elements.chatFeed;
@@ -8486,7 +9752,11 @@ function renderTypingIndicator() {
   const now = Date.now();
   state.typing = state.typing.filter((item) => !item.expiresAt || Number(item.expiresAt) > now);
   const names = [...new Set(state.typing
-    .filter((item) => String(item.roomId) === String(state.activeRoomId) && String(item.userId) !== String(user?.id))
+    .filter((item) => {
+      if (String(item.userId) === String(user?.id)) return false;
+      if (isDmRoute()) return item.dm && String(item.threadId) === String(activeDmThreadId());
+      return !item.dm && String(item.roomId) === String(state.activeRoomId);
+    })
     .map((item) => item.name || "Someone"))];
 
   if (names.length === 0) {

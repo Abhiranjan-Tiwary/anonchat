@@ -35,12 +35,12 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/css/styles.css?v=home-cleanup-20260605" />
+    <link rel="stylesheet" href="/css/styles.css?v=friends-phase3-20260605" />
     <link rel="stylesheet" href="/css/landing-nav-fix.css?v=home-cleanup-20260605" />
     <link rel="stylesheet" href="/css/auth-page-fix.css?v=home-cleanup-20260605" />
     <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=home-cleanup-20260605" />
     <script src="/socket.io/socket.io.js" async data-socket-client-loader onerror="this.dataset.failed='true'"></script>
-<script src="/js/app.js?v=home-cleanup-20260605" defer></script>
+<script src="/js/app.js?v=friends-phase3-20260605" defer></script>
   </head>
   <body>
     <div id="sidebarOverlay"></div>
@@ -422,7 +422,6 @@
 
           <div class="sidebar-section-title sidebar-channel-title" id="sidebarChannelTitle">
             <span>Channels</span>
-            <button type="button" data-menu-action="create-private" aria-label="Add channel">+</button>
           </div>
           <nav class="room-list" id="roomList" aria-label="Chat rooms"></nav>
 
@@ -434,6 +433,10 @@
               <span class="menu-symbol">HM</span>
               <span>Home</span>
             </button>
+            <button class="menu-button" type="button" data-menu-action="friends">
+              <span class="menu-symbol">FR</span>
+              <span>Friends</span>
+            </button>
             <button class="menu-button active" type="button" data-menu-action="join-public">
               <span class="menu-symbol">CH</span>
               <span>Chat Room</span>
@@ -441,10 +444,6 @@
             <button class="menu-button" type="button" data-menu-action="profile">
               <span class="menu-symbol">PF</span>
               <span>Profile</span>
-            </button>
-            <button class="menu-button" type="button" data-menu-action="create-private">
-              <span class="menu-symbol">+</span>
-              <span>Create Private Room</span>
             </button>
             <button class="menu-button" type="button" data-menu-action="my-rooms">
               <span class="menu-symbol">R</span>
@@ -985,9 +984,9 @@
         </div>
         <nav class="mobile-app-nav" aria-label="Mobile navigation">
           <button type="button" data-mobile-menu-action="home">Home</button>
+          <button type="button" data-mobile-menu-action="friends">Friends</button>
           <button type="button" data-mobile-menu-action="chat">Chat Rooms</button>
           <button type="button" data-mobile-menu-action="my-rooms">My Rooms</button>
-          <button type="button" data-mobile-menu-action="create-private">Create Private Room</button>
           <button type="button" data-mobile-menu-action="profile">Profile</button>
           <button type="button" data-mobile-menu-action="settings">Settings</button>
           <button type="button" data-mobile-menu-action="notifications">Notifications</button>
@@ -996,6 +995,10 @@
         <div class="mobile-room-switcher">
           <p>Switch Room</p>
           <div class="mobile-room-list" id="mobileMenuRooms"></div>
+        </div>
+        <div class="mobile-room-switcher mobile-dm-switcher">
+          <p>Direct Messages</p>
+          <div class="mobile-room-list mobile-dm-list" id="mobileMenuDms"></div>
         </div>
       </section>
     </div>
