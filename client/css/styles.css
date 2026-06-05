@@ -11696,3 +11696,50 @@ body:has(#chatView:not(.hidden)) .chat-feed {
     height: 100dvh !important;
   }
 }
+
+/* ===== CHAT/PUBLIC PAGE FINAL FIXES ===== */
+
+body:has(#authView.public-page-route) #chatView,
+#authView.public-page-route ~ #chatView {
+  display: none !important;
+}
+
+#sidebarChannelTitle,
+.sidebar-section-title:has(span):has(+ #roomList),
+.sidebar-section-title:has(span):has(+ #sidebarMenu) {
+  display: none !important;
+}
+
+.chat-feed .message-card {
+  width: fit-content !important;
+  max-width: min(620px, calc(100vw - 128px)) !important;
+  min-width: 0 !important;
+  justify-self: start !important;
+}
+
+.chat-feed .message.mine .message-card {
+  justify-self: end !important;
+}
+
+.chat-feed .message-card:has(.message-attachment) {
+  min-width: min(280px, calc(100vw - 128px));
+}
+
+.chat-feed .message-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-feed .message-tools {
+  display: none !important;
+}
+
+@media (max-width: 768px) {
+  .chat-feed .message-card {
+    max-width: min(82vw, calc(100vw - 88px)) !important;
+  }
+
+  .chat-feed .message-card:has(.message-attachment) {
+    min-width: min(74vw, calc(100vw - 88px));
+  }
+}
