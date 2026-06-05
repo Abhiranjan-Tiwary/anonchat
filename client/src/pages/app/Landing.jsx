@@ -147,7 +147,7 @@ export default function Landing() {
       <footer className="landing-legal-footer">
         <Link to="/privacy">Privacy Policy</Link>
         <Link to="/data-deletion">Data Deletion</Link>
-        <a href="mailto:abhiranjantiwary.cse@gmail.com">Contact</a>
+        <a href="mailto:supportanonchat@gmail.com">Contact</a>
       </footer>
     </main>
   );

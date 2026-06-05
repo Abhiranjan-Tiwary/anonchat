@@ -4417,7 +4417,7 @@ function clearPublicPage() {
 
 function renderPublicPage(route) {
   if (!elements.publicPageView) return;
-  const email = "abhiranjantiwary.cse@gmail.com";
+  const email = "supportanonchat@gmail.com";
   const mailLink = `<a href="mailto:${email}">${email}</a>`;
 
   if (route === DATA_DELETION_ROUTE) {

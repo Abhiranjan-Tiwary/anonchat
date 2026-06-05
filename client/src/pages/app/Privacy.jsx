@@ -24,7 +24,7 @@ const privacySections = [
   },
   {
     title: "Contact",
-    body: "For privacy questions, contact abhiranjantiwary.cse@gmail.com.",
+    body: "For privacy questions, contact supportanonchat@gmail.com.",
   },
 ];
 
@@ -47,7 +47,7 @@ export default function Privacy() {
                 {section.title === "Contact" ? (
                   <>
                     For privacy questions, contact{" "}
-                    <a href="mailto:abhiranjantiwary.cse@gmail.com">abhiranjantiwary.cse@gmail.com</a>.
+                    <a href="mailto:supportanonchat@gmail.com">supportanonchat@gmail.com</a>.
                   </>
                 ) : (
                   section.body

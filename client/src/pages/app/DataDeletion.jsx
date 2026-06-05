@@ -23,7 +23,7 @@ export default function DataDeletion() {
         </p>
 
         <p className="legal-callout">
-          <a href="mailto:abhiranjantiwary.cse@gmail.com">abhiranjantiwary.cse@gmail.com</a>
+          <a href="mailto:supportanonchat@gmail.com">supportanonchat@gmail.com</a>
         </p>
 
         <div className="legal-section">
