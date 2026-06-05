@@ -251,7 +251,7 @@ export const adminLogin = async (req, res, next) => {
         $or: [
           { username: envUsername },
           { username: 'admin' },
-          { email: process.env.ADMIN_EMAIL || 'admin@anonchat.io' },
+          { email: process.env.ADMIN_EMAIL || 'supportanonchat@gmail.com' },
           { role: 'admin' }
         ]
       })
@@ -260,7 +260,7 @@ export const adminLogin = async (req, res, next) => {
         adminUser = await User.create({
           fullName: process.env.ADMIN_NAME || 'Site Admin',
           username: envUsername || 'admin',
-          email: process.env.ADMIN_EMAIL || 'admin@anonchat.io',
+          email: process.env.ADMIN_EMAIL || 'supportanonchat@gmail.com',
           password,
           role: 'admin',
           status: 'active',

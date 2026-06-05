@@ -370,11 +370,14 @@ function cacheElements() {
   elements.passwordToggleButtons = document.querySelectorAll("[data-password-toggle]");
   elements.campusName = document.querySelector("#campusName");
   elements.sidebarMenu = document.querySelector("#sidebarMenu");
+  elements.sidebarChannelTitle = document.querySelector("#sidebarChannelTitle");
   elements.roomList = document.querySelector("#roomList");
   elements.sidebarDmList = document.querySelector("#sidebarDmList");
   elements.roomSearch = document.querySelector("#roomSearch");
   elements.messageSearch = document.querySelector("#messageSearch");
   elements.chatRoomTitle = document.querySelector("#chatRoomTitle");
+  elements.chatTopbar = document.querySelector(".chat-topbar");
+  elements.guidelineNotice = document.querySelector(".guideline-notice");
   elements.chatSearchBar = document.querySelector("#chatSearchBar");
   elements.chatSearchInput = document.querySelector("#chatSearchInput");
   elements.chatSearchCount = document.querySelector("#chatSearchCount");
@@ -4337,6 +4340,7 @@ function render() {
   elements.chatMain?.classList.toggle("home-mode", Boolean(showContentPage));
   elements.chatMain?.classList.toggle("content-page-mode", Boolean(showContentPage));
   elements.homeView?.classList.toggle("hidden", !showContentPage);
+  syncContentPageChrome(showContentPage);
   elements.adminDashboardView?.classList.toggle("hidden", !showAdminDashboard);
   updateInstallButtonState();
   updateMobileAppMenuState();
@@ -4388,6 +4392,7 @@ function render() {
   renderSidebarAvatar(user);
 
   renderRooms();
+  syncContentPageChrome(showContentPage);
   updatePresenceUi();
   if (showHome) renderHomeView();
   if (showMyRooms) renderMyRoomsPage();
@@ -4403,6 +4408,37 @@ function render() {
   renderPanels();
   renderNotifications();
   joinActiveRoom();
+}
+
+function setRouteHidden(element, hidden) {
+  if (!element) return;
+  element.hidden = Boolean(hidden);
+  element.classList.toggle("route-hidden", Boolean(hidden));
+  if (hidden) {
+    element.setAttribute("aria-hidden", "true");
+  } else {
+    element.removeAttribute("aria-hidden");
+  }
+}
+
+function syncContentPageChrome(showContentPage) {
+  const hidden = Boolean(showContentPage);
+  setRouteHidden(elements.sidebarChannelTitle, hidden);
+  setRouteHidden(elements.roomList, hidden);
+  elements.sidebarMenu?.querySelectorAll('[data-menu-action="create-private"]').forEach((button) => {
+    setRouteHidden(button, hidden);
+  });
+
+  [
+    elements.chatTopbar,
+    elements.guidelineNotice,
+    elements.chatFeed,
+    elements.typingIndicator,
+    elements.replyPreview,
+    elements.attachmentPreview,
+    elements.messageForm,
+    elements.detailsPanel,
+  ].forEach((element) => setRouteHidden(element, hidden));
 }
 
 function themeChoices() {

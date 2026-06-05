@@ -25,7 +25,7 @@ MONGODB_DB=anonchat
 CORS_ORIGIN=https://your-production-domain.com
 CLIENT_URL=http://localhost:3000
 JWT_SECRET=replace_with_a_32_plus_character_secret
-EMAIL_USER=your_email@gmail.com
+EMAIL_USER=supportanonchat@gmail.com
 EMAIL_PASS=your_gmail_app_password
 OTP_EXPIRE_MINUTES=10
 

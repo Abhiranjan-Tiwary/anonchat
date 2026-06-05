@@ -1310,8 +1310,25 @@
 
 .chat-shell.user-dashboard.content-page-route .sidebar-channel-title,
 .chat-shell.user-dashboard.content-page-route #roomList,
-.chat-shell.user-dashboard.content-page-route .sidebar-menu .menu-button[data-menu-action="create-private"] {
+.chat-shell.user-dashboard.content-page-route .sidebar-menu .menu-button[data-menu-action="create-private"],
+.chat-shell.user-dashboard.content-page-route .chat-topbar,
+.chat-shell.user-dashboard.content-page-route .guideline-notice,
+.chat-shell.user-dashboard.content-page-route .chat-feed,
+.chat-shell.user-dashboard.content-page-route .typing-indicator,
+.chat-shell.user-dashboard.content-page-route .reply-preview,
+.chat-shell.user-dashboard.content-page-route .attachment-preview,
+.chat-shell.user-dashboard.content-page-route .composer,
+.chat-shell.user-dashboard.content-page-route .whatsapp-composer,
+.chat-shell.user-dashboard.content-page-route .details-panel,
+.chat-shell.user-dashboard .route-hidden {
   display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  max-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
 }
 
 .room-lock-badge {

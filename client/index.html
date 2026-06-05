@@ -35,12 +35,12 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/css/styles.css?v=sidebar-cleanup-20260605" />
-    <link rel="stylesheet" href="/css/landing-nav-fix.css?v=sidebar-cleanup-20260605" />
-    <link rel="stylesheet" href="/css/auth-page-fix.css?v=sidebar-cleanup-20260605" />
-    <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=sidebar-cleanup-20260605" />
+    <link rel="stylesheet" href="/css/styles.css?v=home-cleanup-20260605" />
+    <link rel="stylesheet" href="/css/landing-nav-fix.css?v=home-cleanup-20260605" />
+    <link rel="stylesheet" href="/css/auth-page-fix.css?v=home-cleanup-20260605" />
+    <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=home-cleanup-20260605" />
     <script src="/socket.io/socket.io.js" async data-socket-client-loader onerror="this.dataset.failed='true'"></script>
-<script src="/js/app.js?v=sidebar-cleanup-20260605" defer></script>
+<script src="/js/app.js?v=home-cleanup-20260605" defer></script>
   </head>
   <body>
     <div id="sidebarOverlay"></div>
@@ -420,7 +420,7 @@
             <input id="roomSearch" type="search" placeholder="Search..." autocomplete="off" />
           </label>
 
-          <div class="sidebar-section-title sidebar-channel-title">
+          <div class="sidebar-section-title sidebar-channel-title" id="sidebarChannelTitle">
             <span>Channels</span>
             <button type="button" data-menu-action="create-private" aria-label="Add channel">+</button>
           </div>
