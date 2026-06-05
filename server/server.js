@@ -5656,9 +5656,15 @@ function handleError(res, error) {
 }
 
 function socketUserIds(userId) {
+  const requestedId = String(userId || "");
   const ids = [];
   io.sockets.sockets.forEach((candidate) => {
-    if (String(candidate.data.user?.id || "") === String(userId || "")) {
+    const socketUser = candidate.data.user || {};
+    const socketIds = [
+      socketUser.id,
+      socketUser._id,
+    ].map((value) => String(value || "")).filter(Boolean);
+    if (socketIds.includes(requestedId)) {
       ids.push(candidate.id);
     }
   });

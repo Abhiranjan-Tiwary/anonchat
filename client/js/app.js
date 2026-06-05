@@ -408,6 +408,7 @@ function cacheElements() {
   elements.activeRoomMeta = document.querySelector("#activeRoomMeta");
   elements.activeRoomIcon = document.querySelector("#activeRoomIcon");
   elements.roomCategory = document.querySelector("#roomCategory");
+  elements.topbarStatus = document.querySelector(".topbar-status");
   elements.topbarOnlineCount = document.querySelector("#topbarOnlineCount");
   elements.connectionStatus = document.querySelector("#connectionStatus");
   elements.topbarAudioCallButton = document.querySelector("#topbarAudioCallButton");
@@ -626,6 +627,11 @@ elements.messageInput.addEventListener("input", handleTypingInput);
 
 elements.attachButton.addEventListener("click", toggleAttachmentMenu);
 elements.emojiButton.addEventListener("click", toggleEmojiPicker);
+elements.sendMessageButton?.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  elements.messageForm?.requestSubmit();
+});
 
 elements.attachmentMenu.addEventListener("click", handleAttachmentMenuClick);
 elements.emojiPicker.addEventListener("click", handleEmojiPick);
@@ -875,6 +881,13 @@ window.addEventListener("beforeunload", () => {
       }
 
       if (action.dataset.action === "more") {
+        if (
+          String(activeMessageContextId || "") === String(action.dataset.messageId || "") &&
+          elements.messageContextMenu?.classList.contains("visible")
+        ) {
+          hideMessageContextMenu();
+          return;
+        }
         openMessageContextMenu(action.dataset.messageId, action);
       }
 
@@ -1220,6 +1233,14 @@ function handleGlobalClickFallback(event) {
   const target = event.target;
   if (!clickedEnabled(target)) return;
 
+  if (
+    activeMessageContextId &&
+    !target.closest?.("#messageContextMenu") &&
+    !target.closest?.("[data-action='more']")
+  ) {
+    hideMessageContextMenu();
+  }
+
   const authModeButton = target.closest?.("[data-auth-mode]");
   if (authModeButton) {
     claimClick(event);
@@ -1248,6 +1269,20 @@ function handleGlobalClickFallback(event) {
       handleJoinRoom(roomButton.dataset.roomId);
       closeMobileSidebar();
     }
+    return;
+  }
+
+  const homeShareButton = target.closest?.("[data-share-room-id]");
+  if (homeShareButton && elements.homeView?.contains(homeShareButton)) {
+    claimClick(event);
+    shareRoomLink(homeShareButton.dataset.shareRoomId).catch(handleApiError);
+    return;
+  }
+
+  const homeRoomButton = target.closest?.("[data-home-room-id]");
+  if (homeRoomButton && elements.homeView?.contains(homeRoomButton)) {
+    claimClick(event);
+    handleJoinRoom(homeRoomButton.dataset.homeRoomId);
     return;
   }
 
@@ -1287,6 +1322,7 @@ function handleGlobalClickFallback(event) {
     pwaInstallButton: installPwaApp,
     attachButton: toggleAttachmentMenu,
     emojiButton: toggleEmojiPicker,
+    sendMessageButton: () => elements.messageForm?.requestSubmit(),
     voiceButton: toggleVoiceRecording,
     pollButton: () => {
       closeComposerPopovers();
@@ -1332,7 +1368,7 @@ function handleGlobalClickFallback(event) {
 
   if (handlers[id]) {
     claimClick(event);
-    handlers[id]();
+    handlers[id](event);
     return;
   }
 
@@ -2803,13 +2839,41 @@ function normalizeCallPeer(source = {}) {
 
 function latestCallablePeer() {
   const currentUserId = String(state.session?.user?.id || "");
+  if (isDmRoute()) {
+    const threadId = activeDmThreadId();
+    const thread = findDmThread(threadId);
+    const participant = thread?.participant;
+    if (participant?.id && String(participant.id) !== currentUserId && !isBlockedUserId(participant.id)) {
+      return normalizeCallPeer(participant);
+    }
+
+    const dmMessage = [...dmMessagesForThread(threadId)]
+      .reverse()
+      .find((message) => {
+        const senderId = String(message.senderId || "");
+        const recipientId = String(message.recipientId || "");
+        return (senderId && senderId !== currentUserId) || (recipientId && recipientId !== currentUserId);
+      });
+    const fallbackId = String(dmMessage?.senderId || "") !== currentUserId
+      ? String(dmMessage?.senderId || "")
+      : String(dmMessage?.recipientId || "");
+    if (fallbackId && fallbackId !== currentUserId && !isBlockedUserId(fallbackId)) {
+      return normalizeCallPeer({
+        id: fallbackId,
+        name: elements.activeRoomName?.textContent || "Personal Chat",
+      });
+    }
+    return null;
+  }
+
   const activeRoom = getActiveRoom();
   const activeRoomId = String(activeRoom?.id || state.activeRoomId || "");
-  const latestMessage = [...state.messages]
+  const candidates = [...state.messages]
     .filter((message) => String(message.roomId || "") === activeRoomId)
     .filter((message) => message.authorId && String(message.authorId) !== currentUserId)
     .filter((message) => !message.hidden && !message.deletedAt && !isBlockedUserId(message.authorId))
-    .sort((first, second) => Number(second.createdAt || 0) - Number(first.createdAt || 0))[0];
+    .sort((first, second) => Number(second.createdAt || 0) - Number(first.createdAt || 0));
+  const latestMessage = candidates.find((message) => presenceStatusForUser(message.authorId).online) || candidates[0];
 
   return latestMessage ? normalizeCallPeer(latestMessage) : null;
 }
@@ -2861,7 +2925,7 @@ async function startOutgoingCall(peer, type = "audio") {
     status: "calling",
     type: type === "video" ? "video" : "audio",
     callId,
-    roomId: getActiveRoom()?.id || state.activeRoomId || "",
+    roomId: isDmRoute() ? "" : getActiveRoom()?.id || state.activeRoomId || "",
     peer,
   };
   showCallScreen();
@@ -3234,7 +3298,7 @@ function updateCallUi() {
   if (elements.callDuration) elements.callDuration.textContent = ["active", "reconnecting"].includes(callState.status) ? formatCallClock(callElapsedSeconds()) : "00:00";
   if (elements.muteCallButton) elements.muteCallButton.textContent = callState.muted ? "Unmute" : "Mute";
   if (elements.cameraCallButton) elements.cameraCallButton.textContent = callState.cameraOff ? "Camera On" : "Camera Off";
-  if (elements.endCallButton) elements.endCallButton.textContent = ["calling", "ringing"].includes(callState.status) ? "Cancel" : "End";
+  if (elements.endCallButton) elements.endCallButton.textContent = "End Call";
   updateCallButtonsAvailability();
   updateFloatingCallWidget();
 }
@@ -3577,7 +3641,7 @@ async function logout() {
     joinedRoomId = null;
   }
 
-  navigateTo(LOGIN_ROUTE, { replace: true, render: false });
+  navigateTo(LANDING_ROUTE, { replace: true, render: false });
   render();
 
   if (token) {
@@ -4947,6 +5011,7 @@ function renderChatRoomSummary() {
   }
   ensureVisibleActiveRoom();
   const activeRoom = getActiveRoom();
+  const onlineCount = Number(activeRoom.onlineMembers || activeRoom.activeMembers || 0);
   elements.activeRoomName.textContent = activeRoom.name || "Room";
   if (elements.activeRoomIcon) elements.activeRoomIcon.textContent = activeRoom.icon || "💬";
   if (elements.activeRoomIcon && !activeRoom.icon) elements.activeRoomIcon.textContent = "\u{1F4AC}";
@@ -4954,9 +5019,15 @@ function renderChatRoomSummary() {
     ? `${activeRoom.messageCount || 0} messages - ${activeRoom.onlineMembers || activeRoom.activeMembers || 0} active members`
     : "Public Room";
   if (elements.roomCategory) elements.roomCategory.textContent = activeRoom.category || "Room";
-  if (elements.topbarOnlineCount) elements.topbarOnlineCount.textContent = numberText(activeRoom.onlineMembers || activeRoom.activeMembers || 0);
+  updateTopbarPresence(onlineCount > 0, numberText(onlineCount));
   renderNotifications();
   updateCallButtonsAvailability();
+}
+
+function updateTopbarPresence(online, countText = "") {
+  elements.topbarStatus?.classList.toggle("online", Boolean(online));
+  elements.topbarStatus?.classList.toggle("offline", !online);
+  if (elements.topbarOnlineCount) elements.topbarOnlineCount.textContent = countText || (online ? "1" : "0");
 }
 
 function scheduleRoomSummaryRender() {
@@ -5736,7 +5807,7 @@ function renderDmThreadSummary() {
   const online = participant.online || presenceStatusForUser(participant.id).online;
   elements.activeRoomMeta.textContent = online ? "Online now" : "Private DM";
   if (elements.roomCategory) elements.roomCategory.textContent = "Direct Message";
-  if (elements.topbarOnlineCount) elements.topbarOnlineCount.textContent = online ? "1" : "0";
+  updateTopbarPresence(online, online ? "1" : "0");
   renderNotifications();
   updateCallButtonsAvailability();
 }
@@ -6754,6 +6825,12 @@ function updatePresenceUi() {
   if (selectedProfileAuthorId && elements.viewUsername) {
     const message = profileSelectedMessage();
     if (message) elements.viewUsername.textContent = `@${message.username || message.authorId || "user"} - ${presenceLabel(message.authorId)}`;
+  }
+
+  if (isDmRoute()) {
+    renderDmThreadSummary();
+  } else {
+    updateCallButtonsAvailability();
   }
 }
 
@@ -8000,6 +8077,7 @@ async function handleHomeViewClick(event) {
 
   const button = event.target.closest("[data-home-room-id]");
   if (!button) return;
+  event.preventDefault();
   handleJoinRoom(button.dataset.homeRoomId);
 }
 

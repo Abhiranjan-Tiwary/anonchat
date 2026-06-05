@@ -11743,3 +11743,269 @@ body:has(#authView.public-page-route) #chatView,
     min-width: min(74vw, calc(100vw - 88px));
   }
 }
+
+/* ===== CHAT CONTROLS / SIDEBAR FIX - MUST BE LAST ===== */
+
+.chat-shell.user-dashboard {
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+}
+
+.chat-shell.user-dashboard .sidebar {
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+  max-height: 100dvh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+
+.chat-shell.user-dashboard .sidebar-head,
+.chat-shell.user-dashboard .slack-sidebar-search,
+.chat-shell.user-dashboard .sidebar-menu {
+  flex: 0 0 auto;
+}
+
+.chat-shell.user-dashboard .room-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 32dvh;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chat-shell.user-dashboard .sidebar-dm-list:not(.hidden) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 10px;
+}
+
+.chat-shell.user-dashboard .sidebar-footer {
+  flex: 0 0 auto;
+  margin-top: auto !important;
+}
+
+.chat-shell.user-dashboard .room-button,
+.chat-shell.user-dashboard .menu-button,
+.chat-shell.user-dashboard .slack-dm-row {
+  font-size: 0.8rem;
+}
+
+.home-room-card {
+  cursor: pointer;
+}
+
+/* ===== MOBILE TOPBAR / CALL FIX - MUST BE LAST ===== */
+
+.topbar-status.offline .status-dot {
+  background: #64748b;
+  box-shadow: 0 0 0 4px rgba(100, 116, 139, 0.14);
+}
+
+.topbar-status.online .status-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14);
+}
+
+.call-control.end,
+#endCallButton {
+  min-width: max-content;
+  width: auto;
+  border-color: rgba(239, 68, 68, 0.52) !important;
+  background: linear-gradient(135deg, #dc2626, #ef4444) !important;
+  color: #fff !important;
+  box-shadow: 0 12px 28px rgba(239, 68, 68, 0.28);
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .chat-shell.user-dashboard .chat-topbar {
+    height: auto !important;
+    min-height: 64px !important;
+    display: grid !important;
+    grid-template-columns: 38px minmax(0, 1fr) auto !important;
+    grid-template-areas: "menu title actions" !important;
+    align-items: center !important;
+    gap: 6px !important;
+    padding: max(8px, env(safe-area-inset-top)) 8px 8px !important;
+    overflow: visible !important;
+  }
+
+  .chat-shell.user-dashboard .hamburger-btn {
+    grid-area: menu;
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    padding: 8px !important;
+    align-self: center !important;
+  }
+
+  .chat-shell.user-dashboard .hamburger-btn span {
+    width: 18px !important;
+    margin: 0 auto !important;
+  }
+
+  .chat-shell.user-dashboard .chat-room-topbar-left {
+    grid-area: title;
+    min-width: 0 !important;
+    overflow: hidden !important;
+  }
+
+  .chat-shell.user-dashboard .chat-room-title {
+    min-width: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    overflow: hidden !important;
+  }
+
+  .chat-shell.user-dashboard .room-topbar-icon {
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    font-size: 0.78rem !important;
+  }
+
+  .chat-shell.user-dashboard .room-heading {
+    min-width: 0 !important;
+    overflow: hidden !important;
+    line-height: 1.15 !important;
+  }
+
+  .chat-shell.user-dashboard .room-heading h2 {
+    max-width: 100% !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    font-size: 0.84rem !important;
+    line-height: 1.12 !important;
+  }
+
+  .chat-shell.user-dashboard .room-heading > span {
+    max-width: 100% !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    margin-top: 2px !important;
+    font-size: 0.7rem !important;
+    line-height: 1.1 !important;
+  }
+
+  .chat-shell.user-dashboard .chat-room-topbar-right {
+    grid-area: actions;
+    min-width: 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    gap: 5px !important;
+    overflow: visible !important;
+  }
+
+  .chat-shell.user-dashboard .topbar-status {
+    width: 22px !important;
+    min-width: 22px !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border: 0 !important;
+    background: transparent !important;
+    padding: 0 !important;
+  }
+
+  .chat-shell.user-dashboard .topbar-status strong {
+    display: none !important;
+  }
+
+  .chat-shell.user-dashboard .status-dot {
+    width: 9px !important;
+    height: 9px !important;
+  }
+
+  .chat-shell.user-dashboard .connection-pill,
+  .chat-shell.user-dashboard .topbar-separator {
+    display: none !important;
+  }
+
+  .chat-shell.user-dashboard .topbar-actions {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+    flex: 0 0 auto !important;
+  }
+
+  .chat-shell.user-dashboard .topbar-actions .icon-btn,
+  .chat-shell.user-dashboard .topbar-actions .call-topbar-btn,
+  .chat-shell.user-dashboard .mobile-app-menu-button {
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    min-height: 36px !important;
+    border-radius: 12px !important;
+    padding: 0 !important;
+  }
+
+  .chat-shell.user-dashboard .topbar-actions svg {
+    width: 17px !important;
+    height: 17px !important;
+  }
+
+  .chat-shell.user-dashboard #mediaGalleryButton,
+  .chat-shell.user-dashboard .theme-toggle.compact,
+  .chat-shell.user-dashboard .notification-btn,
+  .chat-shell.user-dashboard #settingsTopButton,
+  .chat-shell.user-dashboard #togglePanel {
+    display: none !important;
+  }
+
+  .call-controls {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    justify-content: center !important;
+    gap: 10px !important;
+  }
+
+  #endCallButton {
+    min-width: 92px !important;
+    padding: 10px 16px !important;
+    border-radius: 999px !important;
+  }
+}
+
+@media (max-width: 380px) {
+  .chat-shell.user-dashboard .chat-topbar {
+    grid-template-columns: 34px minmax(0, 1fr) auto !important;
+    gap: 4px !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
+  }
+
+  .chat-shell.user-dashboard .hamburger-btn,
+  .chat-shell.user-dashboard .topbar-actions .icon-btn,
+  .chat-shell.user-dashboard .topbar-actions .call-topbar-btn,
+  .chat-shell.user-dashboard .mobile-app-menu-button {
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    min-height: 32px !important;
+  }
+
+  .chat-shell.user-dashboard .topbar-status {
+    width: 16px !important;
+    min-width: 16px !important;
+    height: 32px !important;
+    min-height: 32px !important;
+  }
+
+  .chat-shell.user-dashboard .topbar-actions {
+    gap: 4px !important;
+  }
+
+  .chat-shell.user-dashboard .room-topbar-icon {
+    display: none !important;
+  }
+}
