@@ -6928,11 +6928,10 @@ function initPwaExperience() {
   }
 
   window.addEventListener("beforeinstallprompt", (event) => {
-    if (!canShowInstallButtonOnCurrentScreen() || installPromptDismissedRecently()) {
-      deferredInstallPrompt = null;
-      updateInstallButtonState();
-      return;
-    }
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  updateInstallButtonState();
+
 
     event.preventDefault();
     deferredInstallPrompt = event;
