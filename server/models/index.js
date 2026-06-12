@@ -14,6 +14,7 @@ import FriendRequest from './FriendRequest.js'
 import Friendship from './Friendship.js'
 import DmThread from './DmThread.js'
 import DmMessage from './DmMessage.js'
+import PushSubscription from './PushSubscription.js'
 
 const models = {
   User,
@@ -32,7 +33,8 @@ const models = {
   FriendRequest,
   Friendship,
   DmThread,
-  DmMessage
+  DmMessage,
+  PushSubscription
 }
 
 export {
@@ -52,7 +54,8 @@ export {
   FriendRequest,
   Friendship,
   DmThread,
-  DmMessage
+  DmMessage,
+  PushSubscription
 }
 
 export default models

@@ -120,8 +120,14 @@ const RECENT_REACTIONS_KEY = "anonchat-recent-reactions-v1";
 const PASSWORD_RULE_TEXT =
   "Password must be 8-64 characters and include uppercase, lowercase, number, and symbol (! @ # $ % ^ & * _ - + = . ?).";
 const CALL_TIMEOUT_MS = 45000;
+const CALL_CONNECT_TIMEOUT_MS = 25000;
 const RTC_CONFIGURATION = Object.freeze({
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun.cloudflare.com:3478" },
+  ],
+  iceCandidatePoolSize: 10,
 });
 const CLIENT_ALLOWED_ATTACHMENT_TYPES = new Set([
   "image/png",
@@ -283,6 +289,12 @@ let messageRenderState = {
 };
 let roomSummaryRenderTimer = null;
 let deferredInstallPrompt = null;
+let webPushSubscriptionActive = false;
+let webPushSyncPromise = null;
+let resolvedRtcConfiguration = RTC_CONFIGURATION;
+let rtcConfigurationPromise = null;
+const earlyRemoteCallCandidates = new Map();
+let attachmentPickerMode = "";
 let socketHasConnectedOnce = false;
 let connectionStatus = "offline";
 let lastConnectionToastAt = 0;
@@ -314,9 +326,16 @@ let callState = {
   pc: null,
   localStream: null,
   remoteStream: null,
+  audioContext: null,
+  remoteAudioSource: null,
+  pendingLocalCandidates: [],
+  pendingRemoteCandidates: [],
+  signalingReady: false,
+  remotePlaybackNotified: false,
   startedAt: 0,
   durationTimer: null,
   timeoutTimer: null,
+  connectionTimer: null,
   muted: false,
   cameraOff: false,
   facingMode: "user",
@@ -552,6 +571,7 @@ function cacheElements() {
   elements.rejectCallButton = document.querySelector("#rejectCallButton");
   elements.callScreen = document.querySelector("#callScreen");
   elements.remoteVideo = document.querySelector("#remoteVideo");
+  elements.remoteAudio = document.querySelector("#remoteAudio");
   elements.localVideo = document.querySelector("#localVideo");
   elements.audioCallFocus = document.querySelector("#audioCallFocus");
   elements.callPeerAvatar = document.querySelector("#callPeerAvatar");
@@ -743,6 +763,7 @@ window.addEventListener("beforeunload", () => {
   elements.fullscreenCallButton?.addEventListener("click", toggleCallFullscreen);
   elements.minimizeCallButton?.addEventListener("click", minimizeCallUi);
   elements.floatingCallWidget?.addEventListener("click", restoreCallUi);
+  elements.callScreen?.addEventListener("pointerdown", playRemoteCallMedia, { passive: true });
   elements.avatarZoomInput.addEventListener("input", handleCropZoom);
   elements.avatarCropCanvas.addEventListener("pointerdown", startCropDrag);
   elements.avatarCropCanvas.addEventListener("pointermove", moveCropDrag);
@@ -1265,10 +1286,17 @@ function handleGlobalClickFallback(event) {
   const roomButton = target.closest?.("[data-room-id]");
   if (roomButton && elements.roomList?.contains(roomButton)) {
     claimClick(event);
-    if (!getChatContextItem(target)) {
-      handleJoinRoom(roomButton.dataset.roomId);
-      closeMobileSidebar();
-    }
+    handleJoinRoom(roomButton.dataset.roomId);
+    closeMobileSidebar();
+    return;
+  }
+
+  const mobileRoomButton = target.closest?.("[data-mobile-room-id]");
+  if (mobileRoomButton) {
+    claimClick(event);
+    handleJoinRoom(mobileRoomButton.dataset.mobileRoomId);
+    closeMobileAppMenu();
+    closeMobileSidebar();
     return;
   }
 
@@ -1477,6 +1505,7 @@ async function handleAuthSubmit(event) {
 function refreshAuthenticatedStateAfterAuth() {
   refreshState()
     .then(() => (isAdmin() ? refreshAdminState() : null))
+    .then(() => syncWebPushSubscription())
     .then(() => render())
     .catch(() => {
       toast("Logged in, but latest data is still refreshing.");
@@ -1911,7 +1940,7 @@ function handleComposerOutsideClick(event) {
 }
 
 function handleAttachmentMenuClick(event) {
-  const option = event.target.closest("[data-attach-type], [data-placeholder-modal]");
+  const option = event.target.closest("[data-attach-type], [data-compose-action], [data-placeholder-modal]");
   if (!option) return;
 
   event.preventDefault();
@@ -1924,8 +1953,16 @@ function handleAttachmentMenuClick(event) {
 
   const attachmentType = option.dataset.attachType;
   if (attachmentType) {
-    configureAttachmentInput(attachmentType);
-    elements.messageAttachmentInput.click();
+    if (attachmentType === "camera") {
+      openCameraCapture();
+      return;
+    }
+    openAttachmentPicker(attachmentType);
+    return;
+  }
+
+  if (option.dataset.composeAction === "location") {
+    shareLiveLocation();
     return;
   }
 
@@ -1943,23 +1980,77 @@ function handleAttachmentMenuClick(event) {
 }
 
 function configureAttachmentInput(type) {
+  attachmentPickerMode = type;
   elements.messageAttachmentInput.removeAttribute("capture");
   elements.messageAttachmentInput.value = "";
 
   const acceptMap = {
     document:
-      ".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain",
+      ".pdf,.doc,.docx,.txt,.ppt,.pptx,.xls,.xlsx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     media: "image/*,video/*",
     audio: "audio/*",
+    camera: "image/*,video/*",
+    sticker: "image/png,image/jpeg,image/gif,image/webp",
   };
 
   elements.messageAttachmentInput.accept = acceptMap[type] || "image/*,.pdf,.doc,.docx,.txt,audio/*";
 }
 
+function openAttachmentPicker(type) {
+  configureAttachmentInput(type);
+  try {
+    if (typeof elements.messageAttachmentInput.showPicker === "function") {
+      elements.messageAttachmentInput.showPicker();
+    } else {
+      elements.messageAttachmentInput.click();
+    }
+  } catch {
+    elements.messageAttachmentInput.click();
+  }
+}
+
 function openCameraCapture() {
-  configureAttachmentInput("media");
+  configureAttachmentInput("camera");
   elements.messageAttachmentInput.setAttribute("capture", "environment");
-  elements.messageAttachmentInput.click();
+  try {
+    if (typeof elements.messageAttachmentInput.showPicker === "function") {
+      elements.messageAttachmentInput.showPicker();
+    } else {
+      elements.messageAttachmentInput.click();
+    }
+  } catch {
+    elements.messageAttachmentInput.click();
+  }
+}
+
+function shareLiveLocation() {
+  if (!navigator.geolocation) {
+    toast("Location sharing is not supported on this device.");
+    return;
+  }
+
+  toast("Getting your current location...");
+  navigator.geolocation.getCurrentPosition(
+    ({ coords }) => {
+      const latitude = Number(coords.latitude).toFixed(6);
+      const longitude = Number(coords.longitude).toFixed(6);
+      const locationText = `Live location: https://maps.google.com/?q=${latitude},${longitude}`;
+      insertAtCursor(elements.messageInput, `${elements.messageInput.value.trim() ? "\n" : ""}${locationText}`);
+      updateComposerAction();
+      handleTypingInput();
+      elements.messageInput.focus();
+      toast("Location added. Tap send to share it.");
+    },
+    (error) => {
+      const denied = error?.code === error?.PERMISSION_DENIED;
+      toast(denied ? "Location permission was denied." : "Could not get your current location.");
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 15000,
+    }
+  );
 }
 
 async function pickContactForComposer() {
@@ -2275,13 +2366,21 @@ function startConfession() {
 
 async function handleAttachmentSelect(event) {
   const file = event.target.files?.[0];
-  if (file) await setPendingAttachmentFromFile(file);
+  const pickerMode = attachmentPickerMode;
+  attachmentPickerMode = "";
+  if (file) await setPendingAttachmentFromFile(file, { sticker: pickerMode === "sticker" });
   event.target.value = "";
 }
 
-async function setPendingAttachmentFromFile(file) {
+async function setPendingAttachmentFromFile(file, options = {}) {
   try {
     state.pendingAttachment = await buildAttachment(file);
+    if (options.sticker) {
+      if (state.pendingAttachment.kind !== "image") {
+        throw new Error("Choose a PNG, JPG, GIF, or WebP image for a sticker.");
+      }
+      state.pendingAttachment.sticker = true;
+    }
     state.pendingAttachment.uploading = true;
     state.pendingAttachment.uploadProgress = 0;
     renderAttachmentPreview();
@@ -2366,6 +2465,8 @@ function renderAttachmentPreview() {
   const typeLabel =
     attachment.kind === "audio"
       ? "Voice note ready"
+      : attachment.sticker
+        ? "Sticker ready"
       : attachment.kind === "image"
         ? "Image attached"
         : attachment.kind === "video"
@@ -2374,6 +2475,8 @@ function renderAttachmentPreview() {
   const kindLabel =
     attachment.kind === "audio"
       ? "Audio"
+      : attachment.sticker
+        ? "Sticker"
       : attachment.kind === "image"
         ? "Image"
         : attachment.kind === "video"
@@ -2811,9 +2914,16 @@ function defaultCallState() {
     pc: null,
     localStream: null,
     remoteStream: null,
+    audioContext: null,
+    remoteAudioSource: null,
+    pendingLocalCandidates: [],
+    pendingRemoteCandidates: [],
+    signalingReady: false,
+    remotePlaybackNotified: false,
     startedAt: 0,
     durationTimer: null,
     timeoutTimer: null,
+    connectionTimer: null,
     muted: false,
     cameraOff: false,
     facingMode: "user",
@@ -2931,9 +3041,14 @@ async function startOutgoingCall(peer, type = "audio") {
   showCallScreen();
 
   try {
+    const rtcConfigRequest = loadRtcConfiguration();
     await prepareLocalMedia(callState.type);
+    await rtcConfigRequest;
     const pc = setupPeerConnection();
-    const offer = await pc.createOffer();
+    const offer = await pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: callState.type === "video",
+    });
     await pc.setLocalDescription(offer);
     updateCallUi();
 
@@ -2943,7 +3058,7 @@ async function startOutgoingCall(peer, type = "audio") {
       type: callState.type,
       targetUserId: peer.id,
       roomId: callState.roomId,
-      offer,
+      offer: pc.localDescription,
     });
 
     if (!response?.ok) {
@@ -2955,6 +3070,8 @@ async function startOutgoingCall(peer, type = "audio") {
     }
 
     if (callState.callId === callId) {
+      callState.signalingReady = true;
+      flushPendingLocalCandidates();
       callState.timeoutTimer = window.setTimeout(markOutgoingCallMissed, CALL_TIMEOUT_MS);
     }
   } catch (error) {
@@ -2987,23 +3104,147 @@ function emitCallEvent(eventName, payload, timeoutMs = 10000) {
   });
 }
 
+async function loadRtcConfiguration() {
+  if (rtcConfigurationPromise) return rtcConfigurationPromise;
+
+  rtcConfigurationPromise = api("/api/calls/ice-config")
+    .then((config = {}) => {
+      const iceServers = Array.isArray(config.iceServers)
+        ? config.iceServers.filter((server) => server && server.urls)
+        : [];
+      resolvedRtcConfiguration = {
+        iceServers: iceServers.length ? iceServers : RTC_CONFIGURATION.iceServers,
+        iceCandidatePoolSize: Math.max(0, Math.min(Number(config.iceCandidatePoolSize || 10), 20)),
+        bundlePolicy: "max-bundle",
+        rtcpMuxPolicy: "require",
+      };
+      return resolvedRtcConfiguration;
+    })
+    .catch((error) => {
+      debugSocketWarning("TURN configuration unavailable; using STUN fallback:", error.message);
+      resolvedRtcConfiguration = RTC_CONFIGURATION;
+      return resolvedRtcConfiguration;
+    })
+    .finally(() => {
+      rtcConfigurationPromise = null;
+    });
+
+  return rtcConfigurationPromise;
+}
+
+async function unlockCallAudio() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return false;
+  if (!callState.audioContext || callState.audioContext.state === "closed") {
+    callState.audioContext = new AudioContextClass();
+  }
+  if (callState.audioContext.state === "suspended") {
+    await callState.audioContext.resume();
+  }
+  return callState.audioContext.state === "running";
+}
+
 async function prepareLocalMedia(type) {
+  const audioUnlock = unlockCallAudio().catch(() => false);
   const constraints = {
-    audio: true,
-    video: type === "video" ? { facingMode: callState.facingMode || "user" } : false,
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1,
+    },
+    video: type === "video"
+      ? {
+          facingMode: { ideal: callState.facingMode || "user" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        }
+      : false,
   };
   callState.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+  await audioUnlock;
+  if (!callState.localStream.getAudioTracks().length) {
+    throw new Error("Microphone could not be started.");
+  }
+  if (type === "video" && !callState.localStream.getVideoTracks().length) {
+    throw new Error("Camera could not be started.");
+  }
+  callState.localStream.getAudioTracks().forEach((track) => {
+    track.enabled = true;
+    if ("contentHint" in track) track.contentHint = "speech";
+  });
+  callState.localStream.getVideoTracks().forEach((track) => {
+    track.enabled = true;
+    if ("contentHint" in track) track.contentHint = "motion";
+  });
   if (elements.localVideo) {
     elements.localVideo.srcObject = callState.localStream;
     elements.localVideo.muted = true;
+    elements.localVideo.playsInline = true;
+    elements.localVideo.play().catch(() => {});
+  }
+}
+
+function attachRemoteCallStream() {
+  if (elements.remoteVideo) {
+    elements.remoteVideo.srcObject = callState.remoteStream;
+    elements.remoteVideo.muted = true;
+    elements.remoteVideo.playsInline = true;
+  }
+  if (elements.remoteAudio) {
+    elements.remoteAudio.srcObject = callState.remoteStream;
+    elements.remoteAudio.muted = false;
+    elements.remoteAudio.volume = 1;
+  }
+}
+
+async function routeRemoteCallAudio() {
+  if (!callState.remoteStream?.getAudioTracks?.().length) return false;
+
+  try {
+    const unlocked = await unlockCallAudio();
+    if (!unlocked || !callState.audioContext) return false;
+    callState.remoteAudioSource?.disconnect?.();
+    callState.remoteAudioSource = callState.audioContext.createMediaStreamSource(callState.remoteStream);
+    callState.remoteAudioSource.connect(callState.audioContext.destination);
+    if (elements.remoteAudio) {
+      elements.remoteAudio.muted = true;
+      elements.remoteAudio.pause();
+    }
+    return true;
+  } catch (error) {
+    debugSocketWarning("Web Audio call playback unavailable:", error.message);
+    return false;
+  }
+}
+
+async function playRemoteCallMedia() {
+  if (!callState.active || !callState.remoteStream) return;
+  const playTasks = [];
+  const routedThroughAudioContext = await routeRemoteCallAudio();
+  if (elements.remoteVideo?.srcObject) {
+    playTasks.push(elements.remoteVideo.play());
+  }
+  if (elements.remoteAudio?.srcObject) {
+    elements.remoteAudio.muted = routedThroughAudioContext;
+    if (!routedThroughAudioContext) playTasks.push(elements.remoteAudio.play());
+  }
+
+  const results = await Promise.allSettled(playTasks);
+  const blocked = !routedThroughAudioContext && results.some((result) => result.status === "rejected");
+  if (blocked && !callState.remotePlaybackNotified) {
+    callState.remotePlaybackNotified = true;
+    toast("Tap the call screen once to enable call audio.");
+  } else if (!blocked) {
+    callState.remotePlaybackNotified = false;
   }
 }
 
 function setupPeerConnection() {
-  const pc = new RTCPeerConnection(RTC_CONFIGURATION);
+  const pc = new RTCPeerConnection(resolvedRtcConfiguration);
   callState.pc = pc;
   callState.remoteStream = new MediaStream();
-  if (elements.remoteVideo) elements.remoteVideo.srcObject = callState.remoteStream;
+  attachRemoteCallStream();
 
   callState.localStream?.getTracks().forEach((track) => pc.addTrack(track, callState.localStream));
 
@@ -3015,34 +3256,35 @@ function setupPeerConnection() {
         callState.remoteStream.addTrack(track);
       }
     });
-    if (elements.remoteVideo) elements.remoteVideo.srcObject = callState.remoteStream;
+    attachRemoteCallStream();
+    event.track.onunmute = () => playRemoteCallMedia();
+    playRemoteCallMedia();
   };
 
   pc.onicecandidate = (event) => {
-    if (!event.candidate || !callState.callId || !socket?.connected) return;
-    socket.emit("call:ice-candidate", {
-      token: state.session?.token,
-      callId: callState.callId,
-      candidate: event.candidate,
-    });
+    if (!event.candidate || !callState.callId) return;
+    const candidate = event.candidate.toJSON?.() || event.candidate;
+    if (!callState.signalingReady || !socket?.connected) {
+      callState.pendingLocalCandidates.push(candidate);
+      return;
+    }
+    emitLocalIceCandidate(candidate);
+  };
+
+  pc.onicecandidateerror = (event) => {
+    debugSocketWarning("ICE candidate error:", event.errorText || event.errorCode || "unknown");
   };
 
   pc.onconnectionstatechange = () => {
     if (!callState.active) return;
     if (["disconnected", "connecting"].includes(pc.connectionState) && callState.status === "active") {
       callState.status = "reconnecting";
+      startCallConnectionTimeout();
       updateCallUi();
+      playRemoteCallMedia();
       return;
     }
-    if (pc.connectionState === "connected" && ["connecting", "reconnecting"].includes(callState.status)) {
-      callState.status = "active";
-      if (!callState.startedAt) {
-        callState.startedAt = Date.now();
-        startCallDurationTimer();
-      }
-      updateCallUi();
-      return;
-    }
+    if (pc.connectionState === "connected" && activateConnectedCall()) return;
     if (["failed", "closed"].includes(pc.connectionState) && callState.active) {
       toast("Call connection ended.");
       endCurrentCall("ended", true);
@@ -3052,19 +3294,74 @@ function setupPeerConnection() {
   return pc;
 }
 
+function activateConnectedCall() {
+  if (!callState.active || callState.pc?.connectionState !== "connected") return false;
+  window.clearTimeout(callState.connectionTimer);
+  callState.connectionTimer = null;
+  callState.status = "active";
+  if (!callState.startedAt) {
+    callState.startedAt = Date.now();
+    startCallDurationTimer();
+  }
+  updateCallUi();
+  playRemoteCallMedia();
+  return true;
+}
+
+function emitLocalIceCandidate(candidate) {
+  if (!candidate || !socket?.connected || !callState.callId) return;
+  socket.emit("call:ice-candidate", {
+    token: state.session?.token,
+    callId: callState.callId,
+    candidate,
+  });
+}
+
+function flushPendingLocalCandidates() {
+  if (!callState.signalingReady || !socket?.connected) return;
+  const candidates = [...callState.pendingLocalCandidates];
+  callState.pendingLocalCandidates = [];
+  candidates.forEach(emitLocalIceCandidate);
+}
+
+function startCallConnectionTimeout() {
+  window.clearTimeout(callState.connectionTimer);
+  callState.connectionTimer = window.setTimeout(() => {
+    if (!callState.active || !["connecting", "reconnecting"].includes(callState.status)) return;
+    toast("Media connection timed out. A TURN relay may be required for this network.");
+    endCurrentCall("connection-timeout", true);
+  }, CALL_CONNECT_TIMEOUT_MS);
+}
+
+async function drainPendingRemoteCandidates() {
+  if (!callState.pc?.remoteDescription || !callState.pendingRemoteCandidates?.length) return;
+  const candidates = [...callState.pendingRemoteCandidates];
+  callState.pendingRemoteCandidates = [];
+  for (const candidate of candidates) {
+    try {
+      await callState.pc.addIceCandidate(new RTCIceCandidate(candidate));
+    } catch (error) {
+      console.warn("Queued ICE candidate ignored:", error.message);
+    }
+  }
+}
+
 function showIncomingCall(payload) {
   const peer = normalizeCallPeer(payload.caller);
+  const callId = String(payload.callId || "");
   callState = {
     ...defaultCallState(),
     active: true,
     direction: "incoming",
     status: "incoming",
     type: payload.type === "video" ? "video" : "audio",
-    callId: String(payload.callId || ""),
+    callId,
     roomId: payload.roomId || state.activeRoomId || "",
     peer,
     pendingIncoming: payload,
+    pendingRemoteCandidates: earlyRemoteCallCandidates.get(callId) || [],
   };
+  earlyRemoteCallCandidates.delete(callId);
 
   elements.callLayer?.classList.remove("hidden");
   elements.callLayer?.classList.add("incoming-fullscreen");
@@ -3109,20 +3406,24 @@ async function acceptIncomingCall() {
     stopCallRingtone();
     callState.status = "connecting";
     showCallScreen();
+    const rtcConfigRequest = loadRtcConfiguration();
     await prepareLocalMedia(callState.type);
+    await rtcConfigRequest;
     const pc = setupPeerConnection();
+    callState.signalingReady = true;
     await pc.setRemoteDescription(new RTCSessionDescription(incoming.offer));
+    await drainPendingRemoteCandidates();
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     socket?.emit("call:answer", {
       token: state.session?.token,
       callId: callState.callId,
-      answer,
+      answer: pc.localDescription,
     });
-    callState.status = "active";
-    callState.startedAt = Date.now();
-    startCallDurationTimer();
+    flushPendingLocalCandidates();
+    if (!activateConnectedCall()) startCallConnectionTimeout();
     updateCallUi();
+    playRemoteCallMedia();
   } catch (error) {
     socket?.emit("call:reject", {
       token: state.session?.token,
@@ -3156,13 +3457,15 @@ async function handleCallAnswer(payload = {}) {
   if (!callState.active || payload.callId !== callState.callId || !callState.pc) return;
   try {
     if (payload.user) callState.peer = normalizeCallPeer(payload.user);
+    callState.status = "connecting";
+    updateCallUi();
     await callState.pc.setRemoteDescription(new RTCSessionDescription(payload.answer));
+    await drainPendingRemoteCandidates();
     window.clearTimeout(callState.timeoutTimer);
     callState.timeoutTimer = null;
-    callState.status = "active";
-    callState.startedAt = Date.now();
-    startCallDurationTimer();
+    if (!activateConnectedCall()) startCallConnectionTimeout();
     updateCallUi();
+    playRemoteCallMedia();
   } catch (error) {
     console.warn("Call answer failed:", error);
     endCurrentCall("ended", true);
@@ -3170,7 +3473,18 @@ async function handleCallAnswer(payload = {}) {
 }
 
 async function handleRemoteIceCandidate(payload = {}) {
-  if (!callState.pc || payload.callId !== callState.callId || !payload.candidate) return;
+  if (!payload.callId || !payload.candidate) return;
+  if (!callState.active || payload.callId !== callState.callId) {
+    const queued = earlyRemoteCallCandidates.get(payload.callId) || [];
+    earlyRemoteCallCandidates.set(payload.callId, [...queued.slice(-39), payload.candidate]);
+    window.setTimeout(() => earlyRemoteCallCandidates.delete(payload.callId), CALL_TIMEOUT_MS);
+    return;
+  }
+  if (!callState.pc?.remoteDescription) {
+    callState.pendingRemoteCandidates ||= [];
+    callState.pendingRemoteCandidates.push(payload.candidate);
+    return;
+  }
   try {
     await callState.pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
   } catch (error) {
@@ -3234,15 +3548,19 @@ function endCurrentCall(reason = "ended", emit = true) {
 }
 
 function cleanupCall() {
+  const endingCallId = callState.callId;
   const hadVisibleCall = callState.active && elements.callLayer && !elements.callLayer.classList.contains("hidden");
   window.clearInterval(callState.durationTimer);
   window.clearTimeout(callState.timeoutTimer);
+  window.clearTimeout(callState.connectionTimer);
   callState.durationTimer = null;
   callState.timeoutTimer = null;
+  callState.connectionTimer = null;
   try {
     if (callState.pc) {
       callState.pc.ontrack = null;
       callState.pc.onicecandidate = null;
+      callState.pc.onicecandidateerror = null;
       callState.pc.onconnectionstatechange = null;
       callState.pc.close();
     }
@@ -3251,8 +3569,14 @@ function cleanupCall() {
   }
   callState.localStream?.getTracks().forEach((track) => track.stop());
   callState.remoteStream?.getTracks().forEach((track) => track.stop());
+  callState.remoteAudioSource?.disconnect?.();
+  callState.audioContext?.close?.().catch(() => {});
   if (elements.localVideo) elements.localVideo.srcObject = null;
   if (elements.remoteVideo) elements.remoteVideo.srcObject = null;
+  if (elements.remoteAudio) {
+    elements.remoteAudio.pause();
+    elements.remoteAudio.srcObject = null;
+  }
   elements.incomingCallCard?.classList.add("hidden");
   elements.callScreen?.classList.add("hidden");
   elements.floatingCallWidget?.classList.add("hidden");
@@ -3268,6 +3592,7 @@ function cleanupCall() {
     elements.callLayer?.classList.remove("incoming-fullscreen", "call-minimized", "ending");
   }
   stopCallRingtone();
+  if (endingCallId) earlyRemoteCallCandidates.delete(endingCallId);
   if (document.fullscreenElement === elements.callScreen) {
     document.exitFullscreen?.().catch(() => {});
   }
@@ -3382,7 +3707,10 @@ function formatCallClock(seconds) {
 
 function toggleCallMute() {
   const audioTrack = callState.localStream?.getAudioTracks?.()[0];
-  if (!audioTrack) return;
+  if (!audioTrack) {
+    toast("Microphone is not available in this call.");
+    return;
+  }
   audioTrack.enabled = !audioTrack.enabled;
   callState.muted = !audioTrack.enabled;
   updateCallUi();
@@ -3390,7 +3718,10 @@ function toggleCallMute() {
 
 function toggleCallCamera() {
   const videoTrack = callState.localStream?.getVideoTracks?.()[0];
-  if (!videoTrack) return;
+  if (!videoTrack) {
+    toast("Camera is not available in this call.");
+    return;
+  }
   videoTrack.enabled = !videoTrack.enabled;
   callState.cameraOff = !videoTrack.enabled;
   updateCallUi();
@@ -3407,14 +3738,17 @@ async function switchCallCamera() {
     });
     const nextTrack = nextStream.getVideoTracks()[0];
     if (!nextTrack) throw new Error("Camera is not available.");
+    if ("contentHint" in nextTrack) nextTrack.contentHint = "motion";
     const sender = callState.pc.getSenders().find((item) => item.track?.kind === "video");
-    if (sender && nextTrack) await sender.replaceTrack(nextTrack);
+    if (sender) await sender.replaceTrack(nextTrack);
+    else callState.pc.addTrack(nextTrack, callState.localStream);
     callState.localStream.getVideoTracks().forEach((track) => {
       callState.localStream.removeTrack(track);
       track.stop();
     });
     callState.localStream.addTrack(nextTrack);
     if (elements.localVideo) elements.localVideo.srcObject = callState.localStream;
+    elements.localVideo?.play?.().catch(() => {});
     callState.cameraOff = false;
     updateCallUi();
   } catch (error) {
@@ -3614,7 +3948,9 @@ async function deleteMessage(messageId, scope = "everyone") {
 
 async function logout() {
   const token = state.session?.token;
+  const pushCleanup = token ? removeWebPushSubscription(token) : Promise.resolve();
   state.session = null;
+  state.authMode = "login";
   state.admin = {
     users: [],
     reports: [],
@@ -3634,6 +3970,7 @@ async function logout() {
   state.friendSearchLoading = false;
   state.friendActionLoadingId = "";
   localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(ROOM_KEY);
 
   if (socket) {
     socket.disconnect();
@@ -3641,16 +3978,22 @@ async function logout() {
     joinedRoomId = null;
   }
 
+  closeComposerPopovers();
+  closeMobileSidebar();
+  closeMobileAppMenu();
+  elements.authView?.classList.remove("auth-modal-open", "auth-route-mode");
+  if (callState.active) cleanupCall(false);
   navigateTo(LANDING_ROUTE, { replace: true, render: false });
+  window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   render();
 
   if (token) {
     try {
+      await pushCleanup;
       await api("/api/auth/logout", {
         method: "POST",
         body: { token },
       });
-      await refreshState();
     } catch (error) {
       console.warn(error);
     }
@@ -6005,6 +6348,10 @@ function handleDmMessageRealtime(payload = {}) {
     toast(`New message from ${name}`);
   }
 
+  if (!mine && dmMessagesForThread(threadId).length > beforeCount) {
+    notifyIncomingDmMessage(message, thread || findDmThread(threadId));
+  }
+
   renderSidebarDirectMessages();
   renderMobileAppMenuDms();
   renderNotifications();
@@ -6917,22 +7264,20 @@ function updateInstallButtonState() {
 
 function initPwaExperience() {
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/service-worker.js").catch((error) => {
-      debugSocketWarning("Service worker registration failed:", error.message);
-    });
+    navigator.serviceWorker.register("/service-worker.js")
+      .then(() => syncWebPushSubscription())
+      .catch((error) => {
+        debugSocketWarning("Service worker registration failed:", error.message);
+      });
     navigator.serviceWorker.addEventListener("message", (event) => {
       if (event.data?.type !== "anonchat:notification-click") return;
-      if (event.data.roomId) handleJoinRoom(event.data.roomId);
+      if (event.data.dmThreadId) openDmThread(event.data.dmThreadId);
+      else if (event.data.roomId) handleJoinRoom(event.data.roomId);
       else navigateTo(CHAT_ROUTE);
     });
   }
 
   window.addEventListener("beforeinstallprompt", (event) => {
-  event.preventDefault();
-  deferredInstallPrompt = event;
-  updateInstallButtonState();
-
-
     event.preventDefault();
     deferredInstallPrompt = event;
     updateInstallButtonState();
@@ -6965,6 +7310,7 @@ async function installPwaApp() {
     if (choice?.outcome === "accepted") {
       localStorage.removeItem(INSTALL_PROMPT_DISMISSED_KEY);
       toast("Installing AnonChat...");
+      window.setTimeout(() => requestBrowserNotificationPermission(), 400);
     } else {
       localStorage.setItem(INSTALL_PROMPT_DISMISSED_KEY, String(Date.now()));
       toast("Install dismissed.");
@@ -6985,6 +7331,7 @@ async function requestBrowserNotificationPermission() {
   }
 
   if (Notification.permission === "granted") {
+    await syncWebPushSubscription();
     toast("Browser notifications are already enabled.");
     return true;
   }
@@ -6995,8 +7342,105 @@ async function requestBrowserNotificationPermission() {
   }
 
   const result = await Notification.requestPermission();
+  if (result === "granted") await syncWebPushSubscription();
   toast(result === "granted" ? "Browser notifications enabled." : "Notifications were not enabled.");
   return result === "granted";
+}
+
+function urlBase64ToUint8Array(value) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
+  const bytes = window.atob(base64);
+  return Uint8Array.from(bytes, (character) => character.charCodeAt(0));
+}
+
+function canUseWebPush() {
+  return Boolean(
+    state.session?.token &&
+    state.session?.user &&
+    !isGuestSession() &&
+    !isAdmin() &&
+    "serviceWorker" in navigator &&
+    "PushManager" in window &&
+    "Notification" in window
+  );
+}
+
+async function syncWebPushSubscription() {
+  if (!canUseWebPush() || Notification.permission !== "granted") {
+    webPushSubscriptionActive = false;
+    return false;
+  }
+  if (webPushSyncPromise) return webPushSyncPromise;
+
+  webPushSyncPromise = (async () => {
+    try {
+      const config = await api("/api/push/public-key");
+      if (!config.enabled || !config.publicKey) {
+        webPushSubscriptionActive = false;
+        return false;
+      }
+
+      const registration = await navigator.serviceWorker.ready;
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(config.publicKey),
+        });
+      }
+
+      await api("/api/push/subscriptions", {
+        method: "POST",
+        body: {
+          subscription: subscription.toJSON(),
+          userAgent: navigator.userAgent,
+        },
+      });
+      webPushSubscriptionActive = true;
+      return true;
+    } catch (error) {
+      webPushSubscriptionActive = false;
+      debugSocketWarning("Background notification setup failed:", error.message);
+      return false;
+    } finally {
+      webPushSyncPromise = null;
+    }
+  })();
+
+  return webPushSyncPromise;
+}
+
+async function removeWebPushSubscription(token) {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    webPushSubscriptionActive = false;
+    return;
+  }
+
+  let subscription = null;
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    subscription = await registration.pushManager.getSubscription();
+    if (!subscription) return;
+
+    try {
+      await api("/api/push/subscriptions", {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: {
+          endpoint: subscription.endpoint,
+        },
+      });
+    } finally {
+      await subscription.unsubscribe();
+    }
+  } catch (error) {
+    debugSocketWarning("Push subscription cleanup failed:", error.message);
+  } finally {
+    webPushSubscriptionActive = false;
+  }
 }
 
 async function showBrowserNotification(title, options = {}) {
@@ -7009,6 +7453,7 @@ async function showBrowserNotification(title, options = {}) {
     data: {
       url: options.url || "/chat",
       roomId: options.roomId || "",
+      dmThreadId: options.dmThreadId || "",
     },
     silent: Boolean(options.silent),
   };
@@ -7026,7 +7471,9 @@ async function showBrowserNotification(title, options = {}) {
   const notification = new Notification(title, payload);
   notification.onclick = () => {
     window.focus();
-    if (payload.data?.roomId) handleJoinRoom(payload.data.roomId);
+    if (payload.data?.dmThreadId) openDmThread(payload.data.dmThreadId);
+    else if (payload.data?.roomId) handleJoinRoom(payload.data.roomId);
+    else if (payload.data?.url) navigateTo(payload.data.url);
     notification.close();
   };
 }
@@ -7054,6 +7501,27 @@ function notifyIncomingMessage(message) {
   });
 }
 
+function notifyIncomingDmMessage(message, thread = {}) {
+  const settings = loadUserSettings();
+  const threadId = String(message.threadId || thread.id || "");
+  const active = document.visibilityState === "visible" && isDmRoute() && activeDmThreadId() === threadId;
+  if (active) return;
+
+  if (settings.sound && (document.visibilityState === "visible" || !webPushSubscriptionActive)) {
+    playMessageSound();
+  }
+  if (settings.messageNotifications === false) return;
+  if (webPushSubscriptionActive && document.visibilityState !== "visible") return;
+
+  const person = thread.participant || {};
+  showBrowserNotification(person.name || "AnonChat friend", {
+    body: message.text || message.attachment?.name || "Sent an attachment",
+    tag: `dm-${threadId}-${message.id}`,
+    dmThreadId: threadId,
+    url: `${DM_ROUTE_PREFIX}/${encodeURIComponent(threadId)}`,
+  });
+}
+
 function notifyIncomingCall(payload = {}) {
   const caller = normalizeCallPeer(payload.caller);
   playCallRingtone();
@@ -7074,7 +7542,10 @@ function updateUnreadDocumentState(count = totalUnreadCount()) {
 }
 
 function playMessageSound() {
-  playToneSequence([{ frequency: 880, duration: 0.055 }, { frequency: 1174, duration: 0.07 }], 0.055);
+  playToneSequence([
+    { frequency: 659, duration: 0.06, volume: 0.035 },
+    { frequency: 880, duration: 0.08, volume: 0.04 },
+  ], 0.045);
 }
 
 function playCallRingtone() {
@@ -7103,7 +7574,7 @@ function playToneSequence(notes, gap = 0.04) {
       oscillator.frequency.value = note.frequency;
       oscillator.type = "sine";
       gain.gain.setValueAtTime(0.0001, now + offset);
-      gain.gain.exponentialRampToValueAtTime(0.08, now + offset + 0.01);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.01, Number(note.volume || 0.08)), now + offset + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + note.duration);
       oscillator.connect(gain).connect(notificationAudioContext.destination);
       oscillator.start(now + offset);
@@ -7186,7 +7657,10 @@ function highlightedMessageText(value) {
 }
 
 function openMobileSidebar() {
+  closeMobileAppMenu();
   elements.sidebar?.classList.add("open");
+  elements.sidebar?.removeAttribute("inert");
+  elements.sidebar?.setAttribute("aria-hidden", "false");
   elements.sidebarOverlay?.classList.add("show");
   elements.openSidebar?.setAttribute("aria-expanded", "true");
   elements.chatView?.classList.add("sidebar-open");
@@ -7196,6 +7670,11 @@ function openMobileSidebar() {
 
 function closeMobileSidebar() {
   elements.sidebar?.classList.remove("open");
+  if (window.innerWidth <= 768) {
+    elements.sidebar?.setAttribute("aria-hidden", "true");
+  } else {
+    elements.sidebar?.removeAttribute("aria-hidden");
+  }
   elements.sidebarOverlay?.classList.remove("show");
   elements.openSidebar?.setAttribute("aria-expanded", "false");
   elements.chatView?.classList.remove("sidebar-open");
@@ -7203,7 +7682,11 @@ function closeMobileSidebar() {
   document.body.style.overflow = "";
 }
 
-function toggleMobileSidebar() {
+function toggleMobileSidebar(event) {
+  if (event?.preventDefault) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
   if (elements.sidebar?.classList.contains("open")) {
     closeMobileSidebar();
   } else {
@@ -7358,12 +7841,14 @@ function toggleMobileAppMenu() {
 
 function handleMobileAppMenuClick(event) {
   if (event.target.closest("[data-mobile-menu-close]")) {
+    claimClick(event);
     closeMobileAppMenu();
     return;
   }
 
   const roomButton = event.target.closest("[data-mobile-room-id]");
   if (roomButton) {
+    claimClick(event);
     handleJoinRoom(roomButton.dataset.mobileRoomId);
     closeMobileAppMenu();
     return;
@@ -7371,6 +7856,7 @@ function handleMobileAppMenuClick(event) {
 
   const dmButton = event.target.closest("[data-mobile-dm-thread-id]");
   if (dmButton) {
+    claimClick(event);
     openDmThread(dmButton.dataset.mobileDmThreadId);
     closeMobileAppMenu();
     return;
@@ -7885,8 +8371,27 @@ function canEnterRoom(room = {}) {
 }
 
 function handleJoinRoom(roomId) {
-  const room = findRoomById(roomId);
-  if (!room) return;
+  const requestedRoomId = String(roomId || "").trim();
+  let room = findRoomById(requestedRoomId);
+
+  if (!room) {
+    const fallback = Object.values(ROOM_DISPLAY_FALLBACKS).find((item) =>
+      [item.id, item.slug].map(String).includes(requestedRoomId)
+    );
+    if (fallback) {
+      room = normalizeRoom(fallback);
+      state.rooms = [
+        ...state.rooms.filter((item) => ![item.id, item.slug, item._id].map(String).includes(requestedRoomId)),
+        room,
+      ];
+    }
+  }
+
+  if (!room) {
+    toast("This room is still loading. Please try again.");
+    refreshState().catch(handleApiError);
+    return;
+  }
   state.typing = state.typing.filter((item) => !item.dm);
 
   if (roomRequiresPassword(room) && !roomUnlockedForClient(room)) {
@@ -9147,7 +9652,7 @@ function renderAttachment(attachment) {
 
   if (attachment.kind === "image") {
     return `
-      <div class="message-attachment image-attachment">
+      <div class="message-attachment image-attachment ${attachment.sticker ? "sticker-attachment" : ""}">
         <img
           class="message-image msg-image chat-image"
           loading="lazy"

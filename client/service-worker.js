@@ -1,13 +1,13 @@
-const CACHE_NAME = "anonchat-shell-v17-home-cleanup";
+const CACHE_NAME = "anonchat-shell-v21-call-media";
 const SHELL_ASSETS = [
   "/",
   "/offline.html",
   "/manifest.webmanifest",
-  "/css/styles.css?v=home-cleanup-20260605",
+  "/css/styles.css?v=call-media-20260612",
   "/css/landing-nav-fix.css?v=home-cleanup-20260605",
   "/css/auth-page-fix.css?v=home-cleanup-20260605",
   "/css/user-chat-room-fix.css?v=home-cleanup-20260605",
-  "/js/app.js?v=home-cleanup-20260605",
+  "/js/app.js?v=call-media-20260612",
   "/assets/logo/logo.png",
   "/assets/anonchat-preview.png"
 ];
@@ -95,13 +95,20 @@ self.addEventListener("fetch", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  if (event.action === "dismiss") return;
+  self.navigator?.clearAppBadge?.().catch(() => {});
   const targetUrl = event.notification.data?.url || "/";
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
       const existing = clients.find((client) => new URL(client.url).origin === self.location.origin);
       if (existing) {
         existing.focus();
-        existing.postMessage({ type: "anonchat:notification-click", url: targetUrl, roomId: event.notification.data?.roomId || "" });
+        existing.postMessage({
+          type: "anonchat:notification-click",
+          url: targetUrl,
+          roomId: event.notification.data?.roomId || "",
+          dmThreadId: event.notification.data?.dmThreadId || "",
+        });
         return;
       }
       return self.clients.openWindow(targetUrl);
@@ -123,13 +130,31 @@ self.addEventListener("push", (event) => {
     icon: "/assets/logo/logo.png",
     badge: "/assets/logo/logo.png",
     tag: payload.tag || "anonchat-update",
+    renotify: true,
+    silent: false,
+    timestamp: Date.now(),
+    vibrate: [100, 50, 100],
+    actions: [
+      { action: "open", title: "Open chat" },
+      { action: "dismiss", title: "Dismiss" },
+    ],
     data: {
       url: payload.url || "/chat",
       roomId: payload.roomId || "",
+      dmThreadId: payload.dmThreadId || "",
     },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  const badgeTask = self.navigator?.setAppBadge
+    ? self.navigator.setAppBadge(Math.max(1, Number(payload.badgeCount || 1))).catch(() => {})
+    : Promise.resolve();
+  const notificationTask = self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+    const visibleClient = clients.some((client) => client.visibilityState === "visible");
+    if (visibleClient) return;
+    return self.registration.showNotification(title, options);
+  });
+
+  event.waitUntil(Promise.all([badgeTask, notificationTask]));
 });
 
 self.addEventListener("message", (event) => {

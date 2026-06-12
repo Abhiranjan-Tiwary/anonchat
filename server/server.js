@@ -9,6 +9,7 @@ import jwt from "jsonwebtoken";
 import multer from "multer";
 import nodemailer from "nodemailer";
 import helmet from "helmet";
+import webpush from "web-push";
 import { v2 as cloudinary } from "cloudinary";
 import { Server } from "socket.io";
 import { fileURLToPath } from "node:url";
@@ -65,6 +66,11 @@ const allowedOrigins = [
   process.env.CLIENT_URL,
   ...configuredOrigins,
 ].filter(Boolean);
+const DEFAULT_STUN_URLS = Object.freeze([
+  "stun:stun.l.google.com:19302",
+  "stun:stun1.l.google.com:19302",
+  "stun:stun.cloudflare.com:3478",
+]);
 
 const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || "siteadmin").toLowerCase();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "Admin@12345";
@@ -75,6 +81,20 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
   throw new Error("JWT_SECRET must be 32+ characters in .env");
 }
 const EMAIL_FROM = process.env.EMAIL_FROM || `"AnonChat" <${process.env.EMAIL_USER || "supportanonchat@gmail.com"}>`;
+const VAPID_PUBLIC_KEY = String(process.env.VAPID_PUBLIC_KEY || "").trim();
+const VAPID_PRIVATE_KEY = String(process.env.VAPID_PRIVATE_KEY || "").trim();
+const VAPID_SUBJECT = String(process.env.VAPID_SUBJECT || "mailto:supportanonchat@gmail.com").trim();
+let webPushConfigured = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (webPushConfigured) {
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  } catch (error) {
+    webPushConfigured = false;
+    console.warn("Web Push is disabled because the VAPID configuration is invalid:", error.message);
+  }
+} else {
+  console.warn("Web Push is disabled. Add VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY to the server environment.");
+}
 const transporter =
   process.env.EMAIL_USER && process.env.EMAIL_PASS
     ? nodemailer.createTransport({
@@ -558,6 +578,8 @@ async function ensureProductionIndexes() {
     db.collection("dmMessages").createIndex({ recipientId: 1, createdAt: -1 }),
     db.collection("dmMessages").createIndex({ participantIds: 1, createdAt: -1 }),
     db.collection("dmMessages").createIndex({ clientTempId: 1 }, { sparse: true, name: "dmClientTempId_sparse_idx" }),
+    db.collection("pushSubscriptions").createIndex({ endpoint: 1 }, { unique: true }),
+    db.collection("pushSubscriptions").createIndex({ userId: 1, updatedAt: -1 }),
   ]);
 }
 
@@ -619,6 +641,7 @@ function createMongooseDb(modelMap) {
     friendships: modelMap.Friendship,
     dmThreads: modelMap.DmThread,
     dmMessages: modelMap.DmMessage,
+    pushSubscriptions: modelMap.PushSubscription,
   };
 
   return {
@@ -1258,6 +1281,72 @@ app.delete("/api/friends/requests/:requestId", async (req, res) => {
     res.json({
       success: true,
       ...result,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/push/public-key", (req, res) => {
+  res.json({
+    enabled: webPushConfigured,
+    publicKey: webPushConfigured ? VAPID_PUBLIC_KEY : "",
+  });
+});
+
+app.post("/api/push/subscriptions", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    if (!webPushConfigured) throw createHttpError(503, "Push notifications are not configured yet.");
+
+    const subscription = normalizePushSubscription(req.body.subscription);
+    const now = new Date();
+    await db.collection("pushSubscriptions").updateOne(
+      { endpoint: subscription.endpoint },
+      {
+        $set: {
+          userId: String(user.id),
+          subscription,
+          userAgent: cleanText(req.body.userAgent || req.headers["user-agent"], 300),
+          updatedAt: now,
+        },
+        $setOnInsert: {
+          createdAt: now,
+        },
+      },
+      { upsert: true }
+    );
+
+    res.status(201).json({ success: true });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.delete("/api/push/subscriptions", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    const endpoint = cleanText(req.body.endpoint, 2000);
+    if (!endpoint) throw createHttpError(400, "Push subscription endpoint is required.");
+
+    await db.collection("pushSubscriptions").deleteOne({
+      userId: String(user.id),
+      endpoint,
+    });
+    res.json({ success: true });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/calls/ice-config", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    res.json({
+      iceServers: callIceServers(),
+      iceCandidatePoolSize: 10,
     });
   } catch (error) {
     handleError(res, error);
@@ -5023,6 +5112,67 @@ async function emitDmMessageNew(thread, message) {
       message: serializeDmMessage(message),
     });
   });
+
+  const sender = users.get(String(message.senderId || ""));
+  const senderName = displayNameForUser(sender);
+  const unreadByUserId = plainMapValue(thread.unreadByUserId);
+  const recipientIds = (thread.participantIds || [])
+    .map(String)
+    .filter((participantId) => participantId !== String(message.senderId || ""));
+  await Promise.allSettled(
+    recipientIds.map((recipientId) =>
+      sendPushToUser(recipientId, {
+        title: senderName || "AnonChat friend",
+        body: dmMessagePreview(message) || "Sent you a message",
+        tag: `anonchat-dm-${thread.id}`,
+        url: `/dm/${encodeURIComponent(thread.id)}`,
+        dmThreadId: String(thread.id),
+        badgeCount: Math.max(1, Number(unreadByUserId[recipientId] || 1)),
+        type: "dm",
+      })
+    )
+  );
+}
+
+function normalizePushSubscription(value = {}) {
+  const endpoint = cleanText(value.endpoint, 2000);
+  const p256dh = cleanText(value.keys?.p256dh, 500);
+  const auth = cleanText(value.keys?.auth, 500);
+  if (!endpoint.startsWith("https://") || !p256dh || !auth) {
+    throw createHttpError(400, "Invalid push subscription.");
+  }
+
+  return {
+    endpoint,
+    expirationTime: Number.isFinite(Number(value.expirationTime)) ? Number(value.expirationTime) : null,
+    keys: { p256dh, auth },
+  };
+}
+
+async function sendPushToUser(userId, payload = {}) {
+  if (!webPushConfigured || !userId) return;
+
+  const subscriptions = await db.collection("pushSubscriptions")
+    .find({ userId: String(userId) })
+    .limit(20)
+    .toArray();
+
+  await Promise.allSettled(
+    subscriptions.map(async (record) => {
+      try {
+        await webpush.sendNotification(record.subscription, JSON.stringify(payload), {
+          TTL: 120,
+          urgency: "high",
+        });
+      } catch (error) {
+        if ([404, 410].includes(Number(error.statusCode))) {
+          await db.collection("pushSubscriptions").deleteOne({ endpoint: record.endpoint });
+          return;
+        }
+        console.warn(`Push delivery failed for user ${userId}:`, error.message);
+      }
+    })
+  );
 }
 
 async function updateAdminRoom(roomId, input, admin) {
@@ -5480,6 +5630,7 @@ function normalizeAttachment(attachment) {
     url: remoteUrl,
     publicId: cleanText(attachment.publicId || "", 180),
     storage: cleanText(attachment.storage || (remoteUrl ? "remote" : "base64"), 30),
+    sticker: Boolean(attachment.sticker) && kind === "image",
     voiceNote: Boolean(attachment.voiceNote),
     duration: Math.max(0, Math.min(60 * 60, Number(attachment.duration || 0))),
   };
@@ -5742,6 +5893,32 @@ function canReceiveCallFrom(targetUser, callerUser, roomId) {
     return Boolean(roomId && roomHasUserOnline(roomId, targetUser.id) && roomHasUserOnline(roomId, callerUser.id));
   }
   return true;
+}
+
+function callIceServers() {
+  const configuredStunUrls = String(process.env.STUN_URLS || "")
+    .split(",")
+    .map((url) => cleanText(url, 500))
+    .filter((url) => /^stuns?:/i.test(url));
+  const turnUrls = String(process.env.TURN_URLS || "")
+    .split(",")
+    .map((url) => cleanText(url, 500))
+    .filter((url) => /^turns?:/i.test(url));
+  const iceServers = [{
+    urls: configuredStunUrls.length ? configuredStunUrls : [...DEFAULT_STUN_URLS],
+  }];
+  const username = cleanText(process.env.TURN_USERNAME, 300);
+  const credential = cleanText(process.env.TURN_CREDENTIAL, 500);
+
+  if (turnUrls.length && username && credential) {
+    iceServers.push({
+      urls: turnUrls,
+      username,
+      credential,
+    });
+  }
+
+  return iceServers;
 }
 
 async function saveCallMetadata(call, status, durationSeconds = 0) {

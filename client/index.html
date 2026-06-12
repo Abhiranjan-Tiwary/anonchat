@@ -35,12 +35,12 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/css/styles.css?v=mobile-call-fix-20260606" />
+    <link rel="stylesheet" href="/css/styles.css?v=call-media-20260612" />
     <link rel="stylesheet" href="/css/landing-nav-fix.css?v=home-cleanup-20260605" />
     <link rel="stylesheet" href="/css/auth-page-fix.css?v=home-cleanup-20260605" />
     <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=home-cleanup-20260605" />
     <script src="/socket.io/socket.io.js" async data-socket-client-loader onerror="this.dataset.failed='true'"></script>
-<script src="/js/app.js?v=mobile-call-fix-20260606" defer></script>
+<script src="/js/app.js?v=call-media-20260612" defer></script>
   </head>
   <body>
     <div id="sidebarOverlay"></div>
@@ -588,12 +588,12 @@
             <div class="attachment-menu hidden" id="attachmentMenu" aria-label="Attachment options">
               <button type="button" data-attach-type="document"><span class="menu-icon document">DOC</span>Document</button>
               <button type="button" data-attach-type="media"><span class="menu-icon media">IMG</span>Photos &amp; Videos</button>
-              <button type="button" data-placeholder-modal="Camera"><span class="menu-icon camera">CAM</span>Camera</button>
+              <button type="button" data-attach-type="camera"><span class="menu-icon camera">CAM</span>Camera</button>
               <button type="button" data-attach-type="audio"><span class="menu-icon audio">AUD</span>Audio</button>
               <button type="button" data-placeholder-modal="Contact"><span class="menu-icon contact">CON</span>Contact</button>
               <button type="button" id="pollButton"><span class="menu-icon poll">POLL</span>Poll</button>
-              <button type="button" data-placeholder-modal="Event"><span class="menu-icon event">EV</span>Event</button>
-              <button type="button" data-placeholder-modal="New Sticker"><span class="menu-icon sticker">STK</span>New Sticker</button>
+              <button type="button" data-compose-action="location"><span class="menu-icon location">LOC</span>Location</button>
+              <button type="button" data-attach-type="sticker"><span class="menu-icon sticker">STK</span>New Sticker</button>
             </div>
             <div class="emoji-picker hidden" id="emojiPicker" aria-label="Emoji picker">
               <button type="button" data-emoji="😀">😀</button>
@@ -626,7 +626,7 @@
               class="visually-hidden"
               id="messageAttachmentInput"
               type="file"
-              accept="image/*,video/*,.pdf,.doc,.docx,.txt,audio/*"
+              accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.ppt,.pptx,.xls,.xlsx"
             />
             <textarea
               id="messageInput"
@@ -939,7 +939,8 @@
 
       <section class="call-screen hidden" id="callScreen" aria-label="AnonChat call">
         <div class="call-remote-stage">
-          <video id="remoteVideo" autoplay playsinline></video>
+          <video id="remoteVideo" autoplay playsinline muted></video>
+          <audio id="remoteAudio" autoplay playsinline></audio>
           <div class="audio-call-focus" id="audioCallFocus">
             <div class="call-avatar large" id="callPeerAvatar">A</div>
             <h2 id="callPeerName">Anonymous User</h2>

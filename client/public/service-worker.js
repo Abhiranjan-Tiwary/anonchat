@@ -1,13 +1,13 @@
-const CACHE_NAME = "anonchat-shell-v17-home-cleanup";
+const CACHE_NAME = "anonchat-shell-v21-call-media";
 const SHELL_ASSETS = [
   "/",
   "/offline.html",
   "/manifest.webmanifest",
-  "/css/styles.css?v=home-cleanup-20260605",
+  "/css/styles.css?v=call-media-20260612",
   "/css/landing-nav-fix.css?v=home-cleanup-20260605",
   "/css/auth-page-fix.css?v=home-cleanup-20260605",
   "/css/user-chat-room-fix.css?v=home-cleanup-20260605",
-  "/js/app.js?v=home-cleanup-20260605",
+  "/js/app.js?v=call-media-20260612",
   "/assets/logo/logo.png",
   "/assets/anonchat-preview.png"
 ];
@@ -15,7 +15,7 @@ const SHELL_ASSETS = [
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(SHELL_ASSETS))
+      .then((cache) => Promise.allSettled(SHELL_ASSETS.map((asset) => cache.add(asset))))
       .then(() => self.skipWaiting())
   );
 });
@@ -30,9 +30,20 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const request = event.request;
-  const url = new URL(request.url);
+  let url;
 
-  if (request.method !== "GET" || url.pathname.startsWith("/api/") || url.pathname.startsWith("/socket.io/")) {
+  try {
+    url = new URL(request.url);
+  } catch {
+    return;
+  }
+
+  const sameOrigin = url.origin === self.location.origin;
+  const isApiRequest = url.pathname.startsWith("/api/") || url.pathname.startsWith("/socket.io/");
+  const isMediaRequest = ["audio", "video"].includes(request.destination);
+  const isCacheableRequest = request.method === "GET" && sameOrigin && !isApiRequest && !isMediaRequest;
+
+  if (!isCacheableRequest) {
     return;
   }
 
@@ -41,37 +52,113 @@ self.addEventListener("fetch", (event) => {
       fetch(request)
         .then((response) => {
           const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
+          caches.open(CACHE_NAME).then((cache) => cache.put("/", copy)).catch(() => {});
           return response;
         })
-        .catch(() => caches.match("/offline.html"))
+        .catch(() =>
+          caches.match("/offline.html").then((offline) =>
+            offline ||
+            new Response("AnonChat is offline.", {
+              status: 503,
+              headers: { "Content-Type": "text/plain; charset=utf-8" },
+            })
+          )
+        )
     );
     return;
   }
 
   event.respondWith(
-    caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-      const copy = response.clone();
-      if (response.ok && url.origin === self.location.origin) {
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-      }
-      return response;
-    }))
+    caches.match(request).then((cached) => {
+      if (cached) return cached;
+
+      return fetch(request)
+        .then((response) => {
+          if (response.ok && response.type !== "opaque") {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)).catch(() => {});
+          }
+          return response;
+        })
+        .catch(() =>
+          caches.match("/offline.html").then((offline) =>
+            offline ||
+            new Response("", {
+              status: 504,
+              statusText: "Offline",
+            })
+          )
+        );
+    })
   );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  if (event.action === "dismiss") return;
+  self.navigator?.clearAppBadge?.().catch(() => {});
   const targetUrl = event.notification.data?.url || "/";
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
       const existing = clients.find((client) => new URL(client.url).origin === self.location.origin);
       if (existing) {
         existing.focus();
-        existing.postMessage({ type: "anonchat:notification-click", url: targetUrl, roomId: event.notification.data?.roomId || "" });
+        existing.postMessage({
+          type: "anonchat:notification-click",
+          url: targetUrl,
+          roomId: event.notification.data?.roomId || "",
+          dmThreadId: event.notification.data?.dmThreadId || "",
+        });
         return;
       }
       return self.clients.openWindow(targetUrl);
     })
   );
+});
+
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data?.json?.() || {};
+  } catch {
+    payload = { title: "AnonChat", body: event.data?.text?.() || "New update" };
+  }
+
+  const title = payload.title || "AnonChat";
+  const options = {
+    body: payload.body || "You have a new message.",
+    icon: "/assets/logo/logo.png",
+    badge: "/assets/logo/logo.png",
+    tag: payload.tag || "anonchat-update",
+    renotify: true,
+    silent: false,
+    timestamp: Date.now(),
+    vibrate: [100, 50, 100],
+    actions: [
+      { action: "open", title: "Open chat" },
+      { action: "dismiss", title: "Dismiss" },
+    ],
+    data: {
+      url: payload.url || "/chat",
+      roomId: payload.roomId || "",
+      dmThreadId: payload.dmThreadId || "",
+    },
+  };
+
+  const badgeTask = self.navigator?.setAppBadge
+    ? self.navigator.setAppBadge(Math.max(1, Number(payload.badgeCount || 1))).catch(() => {})
+    : Promise.resolve();
+  const notificationTask = self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+    const visibleClient = clients.some((client) => client.visibilityState === "visible");
+    if (visibleClient) return;
+    return self.registration.showNotification(title, options);
+  });
+
+  event.waitUntil(Promise.all([badgeTask, notificationTask]));
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "anonchat:skip-waiting") {
+    self.skipWaiting();
+  }
 });

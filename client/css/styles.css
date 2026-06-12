@@ -6556,6 +6556,7 @@ button[data-settings-action="save-settings"]:hover {
 .menu-icon.contact { background: linear-gradient(135deg, #f59e0b, #ef4444); }
 .menu-icon.poll { background: linear-gradient(135deg, #6366f1, #38bdf8); }
 .menu-icon.event { background: linear-gradient(135deg, #8b5cf6, #06b6d4); }
+.menu-icon.location { background: linear-gradient(135deg, #0ea5e9, #10b981); }
 .menu-icon.sticker { background: linear-gradient(135deg, #f43f5e, #8b5cf6); }
 
 .emoji-picker {
@@ -12007,5 +12008,73 @@ body:has(#authView.public-page-route) #chatView,
 
   .chat-shell.user-dashboard .room-topbar-icon {
     display: none !important;
+  }
+}
+
+#remoteAudio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sticker-attachment {
+  width: fit-content;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.sticker-attachment .message-image {
+  width: min(190px, 52vw);
+  max-height: 190px;
+  object-fit: contain;
+  background: transparent;
+}
+
+/* ===== MOBILE ROOM NAVIGATION FIX - MUST BE LAST ===== */
+
+@media (max-width: 768px) {
+  .chat-shell.user-dashboard #hamburgerBtn {
+    position: relative !important;
+    z-index: 1002 !important;
+    pointer-events: auto !important;
+    touch-action: manipulation !important;
+  }
+
+  .chat-shell.user-dashboard #sidebar,
+  .chat-shell.user-dashboard .sidebar {
+    left: 0 !important;
+    transform: translateX(-104%) !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    transition: transform 180ms ease, visibility 0s linear 180ms !important;
+  }
+
+  .chat-shell.user-dashboard #sidebar.open,
+  .chat-shell.user-dashboard .sidebar.open {
+    left: 0 !important;
+    transform: translateX(0) !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+    transition: transform 180ms ease !important;
+  }
+
+  #sidebarOverlay {
+    pointer-events: none !important;
+  }
+
+  #sidebarOverlay.show {
+    pointer-events: auto !important;
+  }
+
+  .chat-shell.user-dashboard .room-button,
+  .home-room-card[data-home-room-id],
+  [data-home-room-id],
+  [data-mobile-room-id] {
+    pointer-events: auto !important;
+    touch-action: manipulation !important;
   }
 }

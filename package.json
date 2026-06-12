@@ -13,7 +13,8 @@
     "server:dev": "node server/server.js",
     "client:dev": "npm run dev --prefix client",
     "client:build": "npm run build --prefix client",
-    "client:preview": "npm run preview --prefix client"
+    "client:preview": "npm run preview --prefix client",
+    "push:generate-keys": "web-push generate-vapid-keys --json"
   },
   "keywords": [
     "anonymous-chat",
@@ -44,6 +45,7 @@
     "nanoid": "^5.1.11",
     "nodemailer": "^8.0.7",
     "socket.io": "^4.8.3",
+    "web-push": "^3.6.7",
     "xss-clean": "^0.1.4"
   },
   "devDependencies": {
