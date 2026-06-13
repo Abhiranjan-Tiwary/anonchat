@@ -328,6 +328,7 @@ let callState = {
   remoteStream: null,
   audioContext: null,
   remoteAudioSource: null,
+  remoteAudioGain: null,
   pendingLocalCandidates: [],
   pendingRemoteCandidates: [],
   signalingReady: false,
@@ -337,8 +338,13 @@ let callState = {
   timeoutTimer: null,
   connectionTimer: null,
   muted: false,
+  speakerMuted: false,
   cameraOff: false,
   facingMode: "user",
+  primaryVideo: "remote",
+  sharingScreen: false,
+  screenTrack: null,
+  moreMenuOpen: false,
   minimized: false,
   ending: false,
 };
@@ -578,8 +584,14 @@ function cacheElements() {
   elements.callPeerName = document.querySelector("#callPeerName");
   elements.callStatusText = document.querySelector("#callStatusText");
   elements.callDuration = document.querySelector("#callDuration");
+  elements.callMoreButton = document.querySelector("#callMoreButton");
+  elements.callMoreMenu = document.querySelector("#callMoreMenu");
+  elements.callReactionOverlay = document.querySelector("#callReactionOverlay");
   elements.muteCallButton = document.querySelector("#muteCallButton");
   elements.cameraCallButton = document.querySelector("#cameraCallButton");
+  elements.speakerCallButton = document.querySelector("#speakerCallButton");
+  elements.shareScreenCallButton = document.querySelector("#shareScreenCallButton");
+  elements.sendMessageCallButton = document.querySelector("#sendMessageCallButton");
   elements.switchCameraButton = document.querySelector("#switchCameraButton");
   elements.fullscreenCallButton = document.querySelector("#fullscreenCallButton");
   elements.minimizeCallButton = document.querySelector("#minimizeCallButton");
@@ -698,7 +710,7 @@ window.addEventListener("beforeunload", () => {
   elements.chatView?.addEventListener("click", handleChatShellClick);
   elements.sidebar?.addEventListener("touchstart", handleSidebarTouchStart, { passive: true });
   elements.sidebar?.addEventListener("touchend", handleSidebarTouchEnd, { passive: true });
-  elements.togglePanel.addEventListener("click", () => elements.detailsPanel.classList.toggle("open"));
+  elements.togglePanel.addEventListener("click", toggleQuickFriendsPanel);
   elements.settingsTopButton?.addEventListener("click", () => navigateTo(SETTINGS_ROUTE));
   elements.topbarSearchButton?.addEventListener("click", openInlineMessageSearch);
   elements.mediaGalleryButton?.addEventListener("click", openMediaGallery);
@@ -707,7 +719,7 @@ window.addEventListener("beforeunload", () => {
     if (event.key === "Escape") closeInlineMessageSearch();
   });
   elements.closeSearchButton?.addEventListener("click", closeInlineMessageSearch);
-  elements.closeDetailsPanel.addEventListener("click", () => elements.detailsPanel.classList.remove("open"));
+  elements.closeDetailsPanel.addEventListener("click", closeQuickFriendsPanel);
   elements.notificationButton.addEventListener("click", openNotifications);
   elements.safetyPanel?.addEventListener("click", handleSafetyPanelClick);
   elements.closeReportModal.addEventListener("click", closeReportModal);
@@ -757,13 +769,24 @@ window.addEventListener("beforeunload", () => {
   elements.acceptCallButton?.addEventListener("click", acceptIncomingCall);
   elements.rejectCallButton?.addEventListener("click", () => rejectIncomingCall("rejected"));
   elements.endCallButton?.addEventListener("click", () => endCurrentCall("ended", true));
+  elements.callMoreButton?.addEventListener("click", toggleCallMoreMenu);
+  elements.callMoreMenu?.addEventListener("click", handleCallMoreMenuClick);
   elements.muteCallButton?.addEventListener("click", toggleCallMute);
   elements.cameraCallButton?.addEventListener("click", toggleCallCamera);
+  elements.speakerCallButton?.addEventListener("click", toggleCallSpeaker);
+  elements.shareScreenCallButton?.addEventListener("click", toggleCallScreenShare);
+  elements.sendMessageCallButton?.addEventListener("click", sendMessageFromCall);
   elements.switchCameraButton?.addEventListener("click", switchCallCamera);
   elements.fullscreenCallButton?.addEventListener("click", toggleCallFullscreen);
   elements.minimizeCallButton?.addEventListener("click", minimizeCallUi);
   elements.floatingCallWidget?.addEventListener("click", restoreCallUi);
   elements.callScreen?.addEventListener("pointerdown", playRemoteCallMedia, { passive: true });
+  elements.callScreen?.addEventListener("click", closeCallMoreMenuFromOutside);
+  elements.localVideo?.addEventListener("click", () => setCallPrimaryVideo("local"));
+  elements.remoteVideo?.addEventListener("click", () => setCallPrimaryVideo("remote"));
+  elements.localVideo?.addEventListener("keydown", handleCallVideoKeydown);
+  elements.remoteVideo?.addEventListener("keydown", handleCallVideoKeydown);
+  document.addEventListener("fullscreenchange", updateCallUi);
   elements.avatarZoomInput.addEventListener("input", handleCropZoom);
   elements.avatarCropCanvas.addEventListener("pointerdown", startCropDrag);
   elements.avatarCropCanvas.addEventListener("pointermove", moveCropDrag);
@@ -1359,12 +1382,12 @@ function handleGlobalClickFallback(event) {
     logoutButton: logout,
     profileButton: () => navigateTo(PROFILE_ROUTE),
     quickConfession: startConfession,
-    togglePanel: () => elements.detailsPanel?.classList.toggle("open"),
+    togglePanel: toggleQuickFriendsPanel,
     settingsTopButton: () => navigateTo(SETTINGS_ROUTE),
     topbarSearchButton: openInlineMessageSearch,
     mediaGalleryButton: openMediaGallery,
     closeSearchBtn: closeInlineMessageSearch,
-    closeDetailsPanel: () => elements.detailsPanel?.classList.remove("open"),
+    closeDetailsPanel: closeQuickFriendsPanel,
     notificationButton: openNotifications,
     closeReportModal: closeReportModal,
     closeAvatarCropModal: closeAvatarCropper,
@@ -1386,8 +1409,12 @@ function handleGlobalClickFallback(event) {
     acceptCallButton: acceptIncomingCall,
     rejectCallButton: () => rejectIncomingCall("rejected"),
     endCallButton: () => endCurrentCall("ended", true),
+    callMoreButton: toggleCallMoreMenu,
     muteCallButton: toggleCallMute,
     cameraCallButton: toggleCallCamera,
+    speakerCallButton: toggleCallSpeaker,
+    shareScreenCallButton: toggleCallScreenShare,
+    sendMessageCallButton: sendMessageFromCall,
     switchCameraButton: switchCallCamera,
     fullscreenCallButton: toggleCallFullscreen,
     minimizeCallButton: minimizeCallUi,
@@ -2916,6 +2943,7 @@ function defaultCallState() {
     remoteStream: null,
     audioContext: null,
     remoteAudioSource: null,
+    remoteAudioGain: null,
     pendingLocalCandidates: [],
     pendingRemoteCandidates: [],
     signalingReady: false,
@@ -2925,8 +2953,13 @@ function defaultCallState() {
     timeoutTimer: null,
     connectionTimer: null,
     muted: false,
+    speakerMuted: false,
     cameraOff: false,
     facingMode: "user",
+    primaryVideo: "remote",
+    sharingScreen: false,
+    screenTrack: null,
+    moreMenuOpen: false,
     minimized: false,
     ending: false,
   };
@@ -3193,7 +3226,7 @@ function attachRemoteCallStream() {
   }
   if (elements.remoteAudio) {
     elements.remoteAudio.srcObject = callState.remoteStream;
-    elements.remoteAudio.muted = false;
+    elements.remoteAudio.muted = callState.speakerMuted;
     elements.remoteAudio.volume = 1;
   }
 }
@@ -3205,8 +3238,12 @@ async function routeRemoteCallAudio() {
     const unlocked = await unlockCallAudio();
     if (!unlocked || !callState.audioContext) return false;
     callState.remoteAudioSource?.disconnect?.();
+    callState.remoteAudioGain?.disconnect?.();
     callState.remoteAudioSource = callState.audioContext.createMediaStreamSource(callState.remoteStream);
-    callState.remoteAudioSource.connect(callState.audioContext.destination);
+    callState.remoteAudioGain = callState.audioContext.createGain();
+    callState.remoteAudioGain.gain.value = callState.speakerMuted ? 0 : 1;
+    callState.remoteAudioSource.connect(callState.remoteAudioGain);
+    callState.remoteAudioGain.connect(callState.audioContext.destination);
     if (elements.remoteAudio) {
       elements.remoteAudio.muted = true;
       elements.remoteAudio.pause();
@@ -3226,8 +3263,8 @@ async function playRemoteCallMedia() {
     playTasks.push(elements.remoteVideo.play());
   }
   if (elements.remoteAudio?.srcObject) {
-    elements.remoteAudio.muted = routedThroughAudioContext;
-    if (!routedThroughAudioContext) playTasks.push(elements.remoteAudio.play());
+    elements.remoteAudio.muted = routedThroughAudioContext || callState.speakerMuted;
+    if (!routedThroughAudioContext && !callState.speakerMuted) playTasks.push(elements.remoteAudio.play());
   }
 
   const results = await Promise.allSettled(playTasks);
@@ -3567,9 +3604,14 @@ function cleanupCall() {
   } catch (error) {
     console.warn("Call peer cleanup failed:", error.message);
   }
+  if (callState.screenTrack) {
+    callState.screenTrack.onended = null;
+    callState.screenTrack.stop();
+  }
   callState.localStream?.getTracks().forEach((track) => track.stop());
   callState.remoteStream?.getTracks().forEach((track) => track.stop());
   callState.remoteAudioSource?.disconnect?.();
+  callState.remoteAudioGain?.disconnect?.();
   callState.audioContext?.close?.().catch(() => {});
   if (elements.localVideo) elements.localVideo.srcObject = null;
   if (elements.remoteVideo) elements.remoteVideo.srcObject = null;
@@ -3579,6 +3621,8 @@ function cleanupCall() {
   }
   elements.incomingCallCard?.classList.add("hidden");
   elements.callScreen?.classList.add("hidden");
+  elements.callMoreMenu?.classList.add("hidden");
+  if (elements.callReactionOverlay) elements.callReactionOverlay.innerHTML = "";
   elements.floatingCallWidget?.classList.add("hidden");
   if (hadVisibleCall) {
     elements.callLayer?.classList.add("ending");
@@ -3607,25 +3651,84 @@ function showCallScreen() {
   elements.incomingCallCard?.classList.add("hidden");
   elements.callScreen?.classList.remove("hidden");
   callState.minimized = false;
+  callState.moreMenuOpen = false;
   updateCallUi();
 }
 
 function updateCallUi() {
   const peer = callState.peer || {};
+  const hasDuration = ["active", "reconnecting"].includes(callState.status);
   elements.callScreen?.classList.toggle("audio-call", callState.type !== "video");
   elements.callScreen?.classList.toggle("video-call", callState.type === "video");
+  elements.callScreen?.classList.toggle("local-video-primary", callState.primaryVideo === "local");
+  elements.callScreen?.classList.toggle("screen-sharing", Boolean(callState.sharingScreen));
   ["calling", "ringing", "connecting", "active", "reconnecting"].forEach((status) => {
     elements.callScreen?.classList.toggle(status, callState.status === status);
   });
   renderCallAvatar(elements.callPeerAvatar, peer);
   if (elements.callPeerName) elements.callPeerName.textContent = peer.name || "Anonymous User";
-  if (elements.callStatusText) elements.callStatusText.textContent = callStatusLabel();
-  if (elements.callDuration) elements.callDuration.textContent = ["active", "reconnecting"].includes(callState.status) ? formatCallClock(callElapsedSeconds()) : "00:00";
-  if (elements.muteCallButton) elements.muteCallButton.textContent = callState.muted ? "Unmute" : "Mute";
-  if (elements.cameraCallButton) elements.cameraCallButton.textContent = callState.cameraOff ? "Camera On" : "Camera Off";
-  if (elements.endCallButton) elements.endCallButton.textContent = "End Call";
+  if (elements.callStatusText) {
+    elements.callStatusText.textContent = callStatusLabel();
+    elements.callStatusText.hidden = hasDuration;
+  }
+  if (elements.callDuration) {
+    elements.callDuration.textContent = hasDuration ? formatCallClock(callElapsedSeconds()) : "00:00";
+    elements.callDuration.hidden = !hasDuration;
+  }
+
+  updateCallControlState(elements.muteCallButton, {
+    active: callState.muted,
+    label: callState.muted ? "Unmute microphone" : "Mute microphone",
+    title: callState.muted ? "Unmute" : "Mute",
+  });
+  updateCallControlState(elements.cameraCallButton, {
+    active: callState.cameraOff,
+    label: callState.cameraOff ? "Turn camera on" : "Turn camera off",
+    title: callState.cameraOff ? "Camera on" : "Camera off",
+    disabled: callState.sharingScreen,
+  });
+  updateCallControlState(elements.speakerCallButton, {
+    active: callState.speakerMuted,
+    label: callState.speakerMuted ? "Turn speaker on" : "Turn speaker off",
+    title: callState.speakerMuted ? "Speaker on" : "Speaker off",
+  });
+
+  elements.callMoreMenu?.classList.toggle("hidden", !callState.moreMenuOpen);
+  elements.callMoreButton?.setAttribute("aria-expanded", callState.moreMenuOpen ? "true" : "false");
+  elements.callMoreButton?.classList.toggle("is-active", callState.moreMenuOpen);
+  if (elements.shareScreenCallButton) {
+    elements.shareScreenCallButton.disabled = callState.type !== "video" || !navigator.mediaDevices?.getDisplayMedia;
+    const label = elements.shareScreenCallButton.querySelector("[data-call-action-label]");
+    if (label) label.textContent = callState.sharingScreen ? "Stop sharing screen" : "Share screen";
+  }
+  if (elements.switchCameraButton) elements.switchCameraButton.disabled = callState.type !== "video" || callState.sharingScreen;
+  if (elements.fullscreenCallButton) {
+    const label = elements.fullscreenCallButton.querySelector("[data-call-action-label]");
+    if (label) label.textContent = document.fullscreenElement === elements.callScreen ? "Exit full screen" : "Full screen";
+  }
+  if (elements.localVideo) {
+    elements.localVideo.setAttribute(
+      "aria-label",
+      callState.primaryVideo === "local" ? "Your video, full screen" : "Your video, tap to show full screen"
+    );
+  }
+  if (elements.remoteVideo) {
+    elements.remoteVideo.setAttribute(
+      "aria-label",
+      callState.primaryVideo === "remote" ? "Friend video, full screen" : "Friend video, tap to show full screen"
+    );
+  }
   updateCallButtonsAvailability();
   updateFloatingCallWidget();
+}
+
+function updateCallControlState(button, options = {}) {
+  if (!button) return;
+  button.classList.toggle("is-active", Boolean(options.active));
+  button.disabled = Boolean(options.disabled);
+  button.setAttribute("aria-pressed", options.active ? "true" : "false");
+  if (options.label) button.setAttribute("aria-label", options.label);
+  if (options.title) button.title = options.title;
 }
 
 function callStatusLabel() {
@@ -3639,6 +3742,7 @@ function callStatusLabel() {
 
 function minimizeCallUi() {
   if (!callState.active || !elements.callLayer) return;
+  callState.moreMenuOpen = false;
   callState.minimized = true;
   elements.callLayer.classList.add("call-minimized");
   elements.floatingCallWidget?.classList.remove("hidden");
@@ -3705,6 +3809,163 @@ function formatCallClock(seconds) {
   return `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
 }
 
+function toggleCallMoreMenu(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  if (!callState.active) return;
+  callState.moreMenuOpen = !callState.moreMenuOpen;
+  updateCallUi();
+}
+
+function closeCallMoreMenu() {
+  if (!callState.moreMenuOpen) return;
+  callState.moreMenuOpen = false;
+  updateCallUi();
+}
+
+function closeCallMoreMenuFromOutside(event) {
+  if (!callState.moreMenuOpen) return;
+  if (event.target.closest("#callMoreMenu, #callMoreButton")) return;
+  closeCallMoreMenu();
+}
+
+function handleCallMoreMenuClick(event) {
+  event.stopPropagation();
+  const reactionButton = event.target.closest("[data-call-reaction]");
+  if (!reactionButton) return;
+  sendCallReaction(reactionButton.dataset.callReaction);
+}
+
+function sendCallReaction(reaction) {
+  const allowed = ["\u{1F44D}", "\u2764\uFE0F", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F64F}"];
+  if (!callState.active || !allowed.includes(reaction)) return;
+  showCallReaction(reaction, true);
+  socket?.emit("call:reaction", {
+    token: state.session?.token,
+    callId: callState.callId,
+    reaction,
+  });
+  closeCallMoreMenu();
+}
+
+function handleRemoteCallReaction(payload = {}) {
+  if (!callState.active || String(payload.callId || "") !== String(callState.callId || "")) return;
+  showCallReaction(payload.reaction, false);
+}
+
+function showCallReaction(reaction, mine = false) {
+  if (!elements.callReactionOverlay || !reaction) return;
+  const item = document.createElement("span");
+  item.className = `call-reaction ${mine ? "mine" : "remote"}`;
+  item.textContent = reaction;
+  item.setAttribute("aria-label", `${mine ? "You sent" : "Friend sent"} ${reaction}`);
+  elements.callReactionOverlay.append(item);
+  window.setTimeout(() => item.remove(), 2400);
+}
+
+function setCallPrimaryVideo(source) {
+  if (!callState.active || callState.type !== "video") return;
+  if (source === "local" && callState.cameraOff && !callState.sharingScreen) return;
+  callState.primaryVideo = source === "local" ? "local" : "remote";
+  updateCallUi();
+}
+
+function handleCallVideoKeydown(event) {
+  if (!["Enter", " "].includes(event.key)) return;
+  event.preventDefault();
+  setCallPrimaryVideo(event.currentTarget === elements.localVideo ? "local" : "remote");
+}
+
+function toggleCallSpeaker() {
+  if (!callState.active) return;
+  callState.speakerMuted = !callState.speakerMuted;
+  if (callState.remoteAudioGain) {
+    callState.remoteAudioGain.gain.value = callState.speakerMuted ? 0 : 1;
+  } else if (elements.remoteAudio) {
+    elements.remoteAudio.muted = callState.speakerMuted;
+  }
+  if (!callState.speakerMuted) playRemoteCallMedia();
+  updateCallUi();
+}
+
+async function toggleCallScreenShare(event) {
+  event?.preventDefault?.();
+  if (!callState.active || callState.type !== "video") {
+    toast("Screen sharing is available during video calls.");
+    return;
+  }
+  if (callState.sharingScreen) {
+    try {
+      await stopCallScreenShare();
+    } catch (error) {
+      toast(error.message || "Screen sharing could not be stopped.");
+    }
+    return;
+  }
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    toast("Screen sharing is not supported in this browser.");
+    return;
+  }
+
+  closeCallMoreMenu();
+  try {
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 24, max: 30 } },
+      audio: false,
+    });
+    const screenTrack = displayStream.getVideoTracks()[0];
+    const sender = callState.pc?.getSenders?.().find((item) => item.track?.kind === "video");
+    if (!screenTrack || !sender) {
+      displayStream.getTracks().forEach((track) => track.stop());
+      throw new Error("Screen sharing could not be started.");
+    }
+
+    await sender.replaceTrack(screenTrack);
+    callState.screenTrack = screenTrack;
+    callState.sharingScreen = true;
+    callState.primaryVideo = "local";
+    screenTrack.onended = () => {
+      stopCallScreenShare(true).catch((error) => console.warn("Screen share restore failed:", error.message));
+    };
+    if (elements.localVideo) {
+      elements.localVideo.srcObject = new MediaStream([screenTrack]);
+      elements.localVideo.play().catch(() => {});
+    }
+    updateCallUi();
+  } catch (error) {
+    if (error?.name !== "NotAllowedError") toast(error.message || "Screen sharing could not be started.");
+  }
+}
+
+async function stopCallScreenShare(fromBrowser = false) {
+  if (!callState.sharingScreen && !callState.screenTrack) return;
+  const screenTrack = callState.screenTrack;
+  const cameraTrack = callState.localStream?.getVideoTracks?.()[0] || null;
+  const sender = callState.pc?.getSenders?.().find((item) => item.track?.kind === "video");
+
+  callState.sharingScreen = false;
+  callState.screenTrack = null;
+  if (screenTrack) {
+    screenTrack.onended = null;
+    if (!fromBrowser || screenTrack.readyState !== "ended") screenTrack.stop();
+  }
+
+  if (sender) await sender.replaceTrack(cameraTrack);
+  if (elements.localVideo) {
+    elements.localVideo.srcObject = callState.localStream;
+    elements.localVideo.play().catch(() => {});
+  }
+  if (!cameraTrack?.enabled) callState.primaryVideo = "remote";
+  updateCallUi();
+}
+
+function sendMessageFromCall(event) {
+  event?.preventDefault?.();
+  closeCallMoreMenu();
+  minimizeCallUi();
+  window.requestAnimationFrame(() => elements.messageInput?.focus());
+}
+
 function toggleCallMute() {
   const audioTrack = callState.localStream?.getAudioTracks?.()[0];
   if (!audioTrack) {
@@ -3717,6 +3978,10 @@ function toggleCallMute() {
 }
 
 function toggleCallCamera() {
+  if (callState.sharingScreen) {
+    toast("Stop screen sharing before changing the camera.");
+    return;
+  }
   const videoTrack = callState.localStream?.getVideoTracks?.()[0];
   if (!videoTrack) {
     toast("Camera is not available in this call.");
@@ -3724,11 +3989,16 @@ function toggleCallCamera() {
   }
   videoTrack.enabled = !videoTrack.enabled;
   callState.cameraOff = !videoTrack.enabled;
+  if (callState.cameraOff && callState.primaryVideo === "local") callState.primaryVideo = "remote";
   updateCallUi();
 }
 
 async function switchCallCamera() {
   if (callState.type !== "video" || !callState.localStream || !callState.pc) return;
+  if (callState.sharingScreen) {
+    toast("Stop screen sharing before switching the camera.");
+    return;
+  }
   callState.facingMode = callState.facingMode === "user" ? "environment" : "user";
 
   try {
@@ -3757,6 +4027,7 @@ async function switchCallCamera() {
 }
 
 function toggleCallFullscreen() {
+  closeCallMoreMenu();
   if (!elements.callScreen) return;
   if (document.fullscreenElement) {
     document.exitFullscreen?.();
@@ -4676,6 +4947,7 @@ function connectLiveUpdates() {
   socket.on("call:ringing", handleCallRinging);
   socket.on("call:answer", handleCallAnswer);
   socket.on("call:ice-candidate", handleRemoteIceCandidate);
+  socket.on("call:reaction", handleRemoteCallReaction);
   socket.on("call:reject", handleCallRejected);
   socket.on("call:end", handleRemoteCallEnded);
   socket.on("call:busy", handleCallBusy);
@@ -5672,6 +5944,9 @@ async function loadFriendData(options = {}) {
   } finally {
     state.friendsLoading = false;
     if (options.renderAfter && state.route === FRIENDS_ROUTE) renderFriendsPage();
+    if (options.renderQuickPanel || elements.detailsPanel?.classList.contains("open")) {
+      renderUserRightPanel();
+    }
   }
 }
 
@@ -5980,6 +6255,7 @@ async function startDmWithUser(userId) {
   const loadingKey = friendActionKey("message", id);
   state.friendActionLoadingId = loadingKey;
   if (state.route === FRIENDS_ROUTE) renderFriendsPage();
+  if (elements.detailsPanel?.classList.contains("open")) renderUserRightPanel();
 
   try {
     const data = await api("/api/dms/threads", {
@@ -5989,11 +6265,13 @@ async function startDmWithUser(userId) {
     const thread = data.thread ? upsertDmThread(data.thread) : null;
     if (!thread?.id) throw new Error("Personal chat could not be opened.");
     await loadDmMessagesForThread(thread.id, { force: true });
+    closeQuickFriendsPanel();
     openDmThread(thread.id);
     closeMobileSidebar();
   } finally {
     state.friendActionLoadingId = "";
     if (state.route === FRIENDS_ROUTE) renderFriendsPage();
+    if (elements.detailsPanel?.classList.contains("open")) renderUserRightPanel();
   }
 }
 
@@ -6408,6 +6686,7 @@ function handleFriendRealtimeEvent(payload = {}, fallbackType = "friend-update")
       renderNotifications();
       if (state.route === FRIENDS_ROUTE) renderFriendsPage();
       if (state.route === NOTIFICATIONS_ROUTE) renderNotificationsPage();
+      if (elements.detailsPanel?.classList.contains("open")) renderUserRightPanel();
     })
     .catch((error) => console.warn("Friend realtime refresh failed:", error.message));
 }
@@ -7163,6 +7442,9 @@ function updatePresenceUi() {
     node.textContent = presenceLabel(node.dataset.presenceUserId);
     node.classList.toggle("online", Boolean(presence.online));
     node.classList.toggle("offline", !presence.online);
+    const quickPresenceDot = node.closest(".quick-friend-row")?.querySelector(".quick-friend-presence-dot");
+    quickPresenceDot?.classList.toggle("online", Boolean(presence.online));
+    quickPresenceDot?.classList.toggle("offline", !presence.online);
   });
 
   if (!isAdmin() && elements.profileMeta) {
@@ -7708,6 +7990,13 @@ function handleMobileNav() {
 }
 
 function handleChatShellClick(event) {
+  const friendAction = event.target.closest("[data-friend-action]");
+  if (friendAction?.closest("#detailsPanel")) {
+    event.preventDefault();
+    handleFriendAction(friendAction).catch(handleApiError);
+    return;
+  }
+
   if (!elements.sidebar?.classList.contains("open")) return;
   if (event.target.closest("#sidebar") || event.target.closest("#hamburgerBtn, #openSidebar")) return;
   closeMobileSidebar();
@@ -11584,10 +11873,13 @@ function renderPanels() {
   if (!isAdmin()) {
     renderUserRightPanel();
     elements.userInfoPanel?.classList.remove("hidden");
-    elements.safetyPanel?.classList.remove("hidden");
+    elements.safetyPanel?.classList.add("hidden");
     elements.pulsePanel.classList.add("hidden");
     elements.profilePanel.classList.add("hidden");
     elements.moderationPanel.classList.add("hidden");
+    if (!state.friendsLoaded && !state.friendsLoading && !isGuestSession()) {
+      loadFriendData({ renderQuickPanel: true }).catch(handleApiError);
+    }
     return;
   }
 
@@ -11602,61 +11894,124 @@ function renderPanels() {
 }
 
 function renderUserRightPanel() {
-  const user = state.session.user;
-
   if (!elements.userInfoPanel) return;
-  if (!elements.userInfoPanel.querySelector('[data-stable-panel="members"]')) {
+  const detailsHead = elements.detailsPanel?.querySelector(".details-head");
+  const detailsTitle = detailsHead?.querySelector("span");
+  const friends = state.friends || [];
+  const loading = state.friendsLoading || !state.friendsLoaded;
+
+  if (detailsTitle) detailsTitle.textContent = "Friends";
+  detailsHead?.setAttribute("data-active", loading ? "Loading" : `${numberText(friends.length)} total`);
+
+  if (isGuestSession()) {
     elements.userInfoPanel.innerHTML = `
-      <div class="user-info-card online-member-card" data-stable-panel="members">
-        <div class="profile-large compact-user-card">
-          ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "user-info-avatar")}
-          <div>
-            <h2 data-member-label></h2>
-            <p class="online-line"><span class="status-dot"></span> Online in this room</p>
-          </div>
-        </div>
-        <div class="room-info-card">
-          <span>Current room</span>
-          <strong data-current-room></strong>
-          <small data-current-category></small>
-        </div>
-        <div class="online-call-actions">
-          <button class="btn-call-user" type="button" data-call-latest="audio">Audio Call</button>
-          <button class="btn-call-user" type="button" data-call-latest="video">Video Call</button>
-        </div>
+      <div class="quick-friends-empty">
+        <span class="quick-friends-empty-icon" aria-hidden="true">FR</span>
+        <strong>Friends are available after login</strong>
+        <p>Create or sign in to an account to build your private friend list.</p>
       </div>
     `;
-
-    elements.userInfoPanel.querySelectorAll("[data-call-latest]").forEach((button) => {
-      button.addEventListener("click", () => startCallWithLatestPeer(button.dataset.callLatest));
-    });
+    return;
   }
 
-  updateUserRightPanel();
+  if (loading && !friends.length) {
+    elements.userInfoPanel.innerHTML = `
+      <div class="quick-friends-empty" aria-live="polite">
+        <span class="quick-friends-loader" aria-hidden="true"></span>
+        <strong>Loading your friends</strong>
+        <p>Your accepted friends will appear here.</p>
+      </div>
+    `;
+    return;
+  }
+
+  elements.userInfoPanel.innerHTML = `
+    <div class="quick-friends-panel">
+      <div class="quick-friends-intro">
+        <div>
+          <strong>Your friends</strong>
+          <p>Choose a friend to continue a private chat.</p>
+        </div>
+        <span>${numberText(friends.length)}</span>
+      </div>
+      ${
+        friends.length
+          ? `<div class="quick-friends-list">${friends.map(renderQuickFriendRow).join("")}</div>`
+          : `
+            <div class="quick-friends-empty">
+              <span class="quick-friends-empty-icon" aria-hidden="true">FR</span>
+              <strong>No friends yet</strong>
+              <p>Accepted friend requests will automatically appear in this list.</p>
+            </div>
+          `
+      }
+    </div>
+  `;
 }
 
 function updateUserRightPanel() {
   if (isAdmin() || !elements.userInfoPanel) return;
-  const activeRoom = getActiveRoom();
-  const activeCount = Number(activeRoom.onlineMembers || activeRoom.activeMembers || 0);
-  const memberLabel = `${numberText(activeCount)} anonymous ${activeCount === 1 ? "user" : "users"}`;
-  const card = elements.userInfoPanel.querySelector('[data-stable-panel="members"]');
-  if (!card) {
-    renderUserRightPanel();
+  renderUserRightPanel();
+}
+
+function renderQuickFriendRow(entry = {}) {
+  const user = normalizePublicUser(entry.user || {});
+  const livePresence = presenceStatusForUser(user.id);
+  const hasLivePresence = Boolean(state.presence && Object.prototype.hasOwnProperty.call(state.presence, user.id));
+  const online = hasLivePresence ? Boolean(livePresence.online) : Boolean(user.online);
+  const presenceText = online
+    ? "Online"
+    : livePresence.lastSeen || user.lastSeen
+      ? `Last seen ${relativeTime(livePresence.lastSeen || user.lastSeen)}`
+      : "Offline";
+  const loading = isFriendActionLoading(["message"], user.id);
+
+  return `
+    <article class="quick-friend-row" data-friend-user-id="${escapeAttr(user.id)}">
+      <div class="quick-friend-avatar-wrap">
+        ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "quick-friend-avatar")}
+        <span class="quick-friend-presence-dot ${online ? "online" : "offline"}" aria-hidden="true"></span>
+      </div>
+      <div class="quick-friend-copy">
+        <strong title="${escapeAttr(user.name)}">${escapeHtml(user.name)}</strong>
+        <span>@${escapeHtml(user.username || "friend")}</span>
+        <small class="${online ? "online" : "offline"}" data-presence-user-id="${escapeAttr(user.id)}">${escapeHtml(presenceText)}</small>
+      </div>
+      <button
+        class="quick-friend-message"
+        type="button"
+        data-friend-action="message"
+        data-user-id="${escapeAttr(user.id)}"
+        aria-label="Message ${escapeAttr(user.name)}"
+        ${loading ? "disabled" : ""}>
+        ${loading ? "Opening..." : "Message"}
+      </button>
+    </article>
+  `;
+}
+
+function closeQuickFriendsPanel() {
+  elements.detailsPanel?.classList.remove("open");
+  elements.togglePanel?.setAttribute("aria-expanded", "false");
+}
+
+function toggleQuickFriendsPanel(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  if (!elements.detailsPanel) return;
+
+  if (elements.detailsPanel.classList.contains("open")) {
+    closeQuickFriendsPanel();
     return;
   }
 
-  const detailsTitle = elements.detailsPanel?.querySelector(".details-head span");
-  if (detailsTitle) detailsTitle.textContent = "Online Members";
-  elements.detailsPanel?.querySelector(".details-head")?.setAttribute("data-active", `${numberText(activeCount)} active`);
+  elements.detailsPanel.classList.add("open");
+  elements.togglePanel?.setAttribute("aria-expanded", "true");
+  renderUserRightPanel();
 
-  const label = card.querySelector("[data-member-label]");
-  const roomName = card.querySelector("[data-current-room]");
-  const category = card.querySelector("[data-current-category]");
-  if (label) label.textContent = memberLabel;
-  if (roomName) roomName.textContent = activeRoom.name || "General Chat";
-  if (category) category.textContent = activeRoom.category || "Public Room";
-  updateCallButtonsAvailability();
+  if (!state.friendsLoaded && !state.friendsLoading && !isGuestSession() && !isAdmin()) {
+    loadFriendData({ renderQuickPanel: true }).catch(handleApiError);
+  }
 }
 
 function renderPulsePanel() {

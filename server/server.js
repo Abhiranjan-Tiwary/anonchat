@@ -6336,6 +6336,25 @@ io.on("connection", async (socket) => {
     }
   });
 
+  socket.on("call:reaction", async (payload = {}) => {
+    try {
+      const user = await requireUser(payload.token);
+      ensureActiveUser(user);
+      const call = callSessions.get(String(payload.callId || ""));
+      if (!call || call.status !== "active") return;
+      if (![call.callerId, call.targetId].map(String).includes(String(user.id))) return;
+      const reaction = String(payload.reaction || "");
+      if (!["\u{1F44D}", "\u2764\uFE0F", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F64F}"].includes(reaction)) return;
+      emitToUser(callPeerId(call, user.id), "call:reaction", {
+        callId: call.id,
+        reaction,
+        fromUserId: user.id,
+      });
+    } catch (error) {
+      socket.emit("call:error", { error: error.message || "Call reaction failed." });
+    }
+  });
+
   socket.on("call:reject", async (payload = {}) => {
     try {
       const user = await requireUser(payload.token);
