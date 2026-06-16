@@ -170,6 +170,10 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  suspendedBy: {
+    type: String,
+    default: ''
+  },
   lastSeen: {
     type: Date,
     default: Date.now

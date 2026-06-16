@@ -25,6 +25,15 @@ const io = new Server(server);
 globalThis.anonchatIo = io;
 
 const PORT = Number(process.env.PORT || 3000);
+const TRUST_PROXY = String(process.env.TRUST_PROXY || "").trim().toLowerCase();
+const TRUST_PROXY_SETTING = TRUST_PROXY
+  ? /^\d+$/.test(TRUST_PROXY)
+    ? Number(TRUST_PROXY)
+    : !["0", "false", "no"].includes(TRUST_PROXY)
+  : process.env.NODE_ENV === "production"
+    ? 1
+    : false;
+app.set("trust proxy", TRUST_PROXY_SETTING);
 const SERVER_DIR = __dirname;
 const ROOT_DIR = path.resolve(SERVER_DIR, "..");
 const CLIENT_DIR = path.join(ROOT_DIR, "client");
@@ -120,7 +129,20 @@ if (cloudinaryConfigured) {
 }
 const uploadMemory = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_ATTACHMENT_BYTES },
+  limits: {
+    fileSize: MAX_ATTACHMENT_BYTES,
+    files: 1,
+    fields: 2,
+    parts: 3,
+  },
+  fileFilter: (req, file, callback) => {
+    const mimeType = normalizeMimeType(file.mimetype);
+    if (!ALLOWED_ATTACHMENT_TYPES.has(mimeType)) {
+      callback(createHttpError(400, "This file type is not supported yet."));
+      return;
+    }
+    callback(null, true);
+  },
 });
 const DEFAULT_PLATFORM_SETTINGS = {
   maintenanceMode: false,
@@ -150,6 +172,8 @@ const tokenCache = new Map();
 const adminTokenCache = new Map();
 const callSessions = new Map();
 const activeCallsByUser = new Map();
+const callDisconnectTimers = new Map();
+const CALL_DISCONNECT_GRACE_MS = 15000;
 let _roomsCache = null;
 let _roomsCacheTime = 0;
 
@@ -178,16 +202,25 @@ const rateLimiters = {
   auth: createRateLimiter({
     windowMs: (req) => (relaxedAuthLimits || isLocalRequest(req) ? 5 * 60 * 1000 : 10 * 60 * 1000),
     max: (req) => (relaxedAuthLimits || isLocalRequest(req) ? 200 : 60),
+    keyPrefix: "auth",
   }),
-  message: createRateLimiter({ windowMs: 60 * 1000, max: 20 }),
-  report: createRateLimiter({ windowMs: 10 * 60 * 1000, max: 5 }),
-  reset: createRateLimiter({ windowMs: 15 * 60 * 1000, max: 3 }),
+  message: createRateLimiter({ windowMs: 60 * 1000, max: 90, keyPrefix: "message" }),
+  report: createRateLimiter({ windowMs: 10 * 60 * 1000, max: 5, keyPrefix: "report" }),
+  reset: createRateLimiter({ windowMs: 15 * 60 * 1000, max: 3, keyPrefix: "reset" }),
+  upload: createRateLimiter({ windowMs: 10 * 60 * 1000, max: 30, keyPrefix: "upload" }),
+  account: createRateLimiter({ windowMs: 10 * 60 * 1000, max: 20, keyPrefix: "account" }),
+  admin: createRateLimiter({
+    windowMs: 60 * 1000,
+    max: (req) => (req.method === "GET" ? 180 : 45),
+    keyPrefix: "admin",
+  }),
 };
 
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
 app.use(securityHeaders);
 app.use(corsGuard);
 app.use(express.json({ limit: "6mb" }));
+app.use(rejectUnsafeRequestKeys);
 app.use("/css", express.static(path.join(CLIENT_DIR, "css")));
 app.use("/js", express.static(path.join(CLIENT_DIR, "js")));
 app.use("/assets", express.static(path.join(CLIENT_DIR, "assets")));
@@ -197,7 +230,7 @@ function securityHeaders(req, res, next) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.setHeader("Permissions-Policy", "camera=(self), geolocation=(), microphone=(self)");
+  res.setHeader("Permissions-Policy", "camera=(self), geolocation=(self), microphone=(self)");
   res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   res.setHeader("X-XSS-Protection", "1; mode=block");
   res.setHeader(
@@ -222,6 +255,24 @@ function securityHeaders(req, res, next) {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
   }
   next();
+}
+
+function rejectUnsafeRequestKeys(req, res, next) {
+  if (containsUnsafeObjectKey(req.body)) {
+    res.status(400).json({ error: "Request contains unsupported object keys.", status: 400 });
+    return;
+  }
+  next();
+}
+
+function containsUnsafeObjectKey(value, depth = 0) {
+  if (depth > 12 || value == null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some((item) => containsUnsafeObjectKey(item, depth + 1));
+
+  return Object.entries(value).some(([key, item]) => {
+    const unsafe = key === "__proto__" || key === "prototype" || key === "constructor" || key.startsWith("$") || key.includes(".");
+    return unsafe || containsUnsafeObjectKey(item, depth + 1);
+  });
 }
 
 function corsGuard(req, res, next) {
@@ -304,13 +355,14 @@ function clearAuthCookie(res) {
   });
 }
 
-function createRateLimiter({ windowMs, max }) {
+function createRateLimiter({ windowMs, max, keyPrefix = "api" }) {
   const hits = new Map();
+  let requestCount = 0;
 
   return (req, res, next) => {
     const limitWindowMs = typeof windowMs === "function" ? windowMs(req) : windowMs;
     const limitMax = typeof max === "function" ? max(req) : max;
-    const key = `${clientIp(req)}:${req.path}`;
+    const key = `${keyPrefix}:${rateLimitIdentity(req)}`;
     const now = Date.now();
     const record = hits.get(key) || { count: 0, resetAt: now + limitWindowMs };
 
@@ -321,14 +373,37 @@ function createRateLimiter({ windowMs, max }) {
 
     record.count += 1;
     hits.set(key, record);
+    requestCount += 1;
+
+    if (requestCount % 250 === 0) {
+      for (const [storedKey, storedRecord] of hits.entries()) {
+        if (storedRecord.resetAt <= now) hits.delete(storedKey);
+      }
+    }
+
+    const remaining = Math.max(0, limitMax - record.count);
+    const resetSeconds = Math.max(1, Math.ceil((record.resetAt - now) / 1000));
+    res.setHeader("RateLimit-Limit", String(limitMax));
+    res.setHeader("RateLimit-Remaining", String(remaining));
+    res.setHeader("RateLimit-Reset", String(resetSeconds));
 
     if (record.count > limitMax) {
-      res.status(429).json({ error: "Too many requests. Please wait and try again." });
+      res.setHeader("Retry-After", String(resetSeconds));
+      res.status(429).json({
+        error: "Too many requests. Please wait and try again.",
+        retryAfterSeconds: resetSeconds,
+        status: 429,
+      });
       return;
     }
 
     next();
   };
+}
+
+function rateLimitIdentity(req) {
+  const token = requestToken(req);
+  return token ? `token:${hashToken(token).slice(0, 20)}` : `ip:${clientIp(req)}`;
 }
 
 function loginRateLimit(req, res, next) {
@@ -421,8 +496,7 @@ function cleanupLoginFailureCounters() {
 }
 
 function clientIp(req) {
-  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  const ip = forwarded || req.ip || req.socket.remoteAddress || "local";
+  const ip = req.ip || req.socket.remoteAddress || "local";
   return String(ip).replace(/^::ffff:/, "");
 }
 
@@ -553,13 +627,17 @@ async function initializeMongoModels() {
 
 async function ensureProductionIndexes() {
   await Promise.all([
-    db.collection("messages").createIndex({ roomId: 1, createdAt: -1 }),
+    db.collection("messages").createIndex({ roomId: 1, hidden: 1, createdAt: -1, _id: -1 }),
     db.collection("messages").createIndex({ authorId: 1, createdAt: -1 }),
+    db.collection("messages").createIndex({ createdAt: -1 }),
     db.collection("messages").createIndex({ clientTempId: 1 }, { sparse: true, name: "clientTempId_sparse_idx" }),
     db.collection("calls").createIndex({ createdAt: -1 }),
     db.collection("calls").createIndex({ callerId: 1, targetId: 1, startedAt: -1 }),
     db.collection("reports").createIndex({ status: 1, createdAt: -1 }),
+    db.collection("reports").createIndex({ reporterPublicId: 1, messagePublicId: 1, status: 1 }),
     db.collection("rooms").createIndex({ status: 1, hidden: 1 }),
+    db.collection("users").createIndex({ role: 1, status: 1, createdAt: -1 }),
+    db.collection("users").createIndex({ status: 1, createdAt: -1 }),
     db.collection("friendRequests").createIndex({ id: 1 }, { unique: true, sparse: true }),
     db.collection("friendRequests").createIndex({ pairKey: 1, status: 1, createdAt: -1 }),
     db.collection("friendRequests").createIndex({ fromUserId: 1, toUserId: 1, status: 1 }),
@@ -573,13 +651,16 @@ async function ensureProductionIndexes() {
     db.collection("dmThreads").createIndex({ participantIds: 1, status: 1, updatedAt: -1 }),
     db.collection("dmThreads").createIndex({ status: 1, lastMessageAt: -1 }),
     db.collection("dmMessages").createIndex({ id: 1 }, { unique: true, sparse: true }),
-    db.collection("dmMessages").createIndex({ threadId: 1, createdAt: -1 }),
+    db.collection("dmMessages").createIndex({ threadId: 1, createdAt: -1, _id: -1 }),
     db.collection("dmMessages").createIndex({ senderId: 1, createdAt: -1 }),
     db.collection("dmMessages").createIndex({ recipientId: 1, createdAt: -1 }),
     db.collection("dmMessages").createIndex({ participantIds: 1, createdAt: -1 }),
     db.collection("dmMessages").createIndex({ clientTempId: 1 }, { sparse: true, name: "dmClientTempId_sparse_idx" }),
     db.collection("pushSubscriptions").createIndex({ endpoint: 1 }, { unique: true }),
     db.collection("pushSubscriptions").createIndex({ userId: 1, updatedAt: -1 }),
+    db.collection("adminAuditLogs").createIndex({ action: 1, createdAt: -1 }),
+    db.collection("adminAuditLogs").createIndex({ targetType: 1, createdAt: -1 }),
+    db.collection("announcements").createIndex({ status: 1, createdAt: -1 }),
   ]);
 }
 
@@ -724,6 +805,11 @@ class MongooseCursor {
     return this;
   }
 
+  skip(count) {
+    this.query = this.query.skip(Number(count));
+    return this;
+  }
+
   async toArray() {
     return normalizeDocument(await this.query.lean({ virtuals: false }));
   }
@@ -773,6 +859,7 @@ app.get(
     "/privacy",
     "/data-deletion",
     "/admin",
+    "/admin/login",
     "/chat",
     "/dashboard",
     "/friends",
@@ -791,6 +878,7 @@ app.get(
     "/admin/reports",
     "/admin/blocked-users",
     "/admin/messages-monitoring",
+    "/admin/audit-log",
     "/admin/announcements",
     "/admin/settings",
   ],
@@ -1042,7 +1130,7 @@ app.post("/api/auth/password-reset/confirm", rateLimiters.reset, async (req, res
   }
 });
 
-app.patch("/api/users/profile", async (req, res) => {
+app.patch("/api/users/profile", rateLimiters.account, async (req, res) => {
   try {
     const user = await requireUser(requestToken(req));
     const updated = await updateProfile(user, req.body.profile || {});
@@ -1054,7 +1142,7 @@ app.patch("/api/users/profile", async (req, res) => {
   }
 });
 
-app.post("/api/upload/avatar/base64", async (req, res) => {
+app.post("/api/upload/avatar/base64", rateLimiters.upload, async (req, res) => {
   try {
     const user = await requireUser(requestToken(req));
     ensureActiveUser(user);
@@ -1079,10 +1167,9 @@ app.post("/api/upload/avatar/base64", async (req, res) => {
   }
 });
 
-app.post("/api/upload/chat", runSingleUpload("file"), async (req, res) => {
+app.post("/api/upload/chat", rateLimiters.upload, requireActiveUserRequest, runSingleUpload("file"), async (req, res) => {
   try {
-    const user = await requireUser(requestToken(req));
-    ensureActiveUser(user);
+    const user = req.authUser;
     if (!req.file) throw createHttpError(400, "Choose a file to upload.");
 
     const attachment = await uploadChatFile(req.file, user);
@@ -1096,11 +1183,16 @@ app.post("/api/upload/chat", runSingleUpload("file"), async (req, res) => {
   }
 });
 
-app.delete("/api/upload/avatar", async (req, res) => {
+app.delete("/api/upload/avatar", rateLimiters.upload, async (req, res) => {
   try {
     const user = await requireUser(requestToken(req));
     ensureActiveUser(user);
-    const publicId = cleanText(req.body.publicId || req.body.avatarPublicId || "", 180);
+    const requestedPublicId = cleanText(req.body.publicId || req.body.avatarPublicId || "", 180);
+    const storedPublicId = cleanText(user.avatarPublicId || "", 180);
+    if (requestedPublicId && requestedPublicId !== storedPublicId) {
+      throw createHttpError(403, "You can only remove your own profile photo.");
+    }
+    const publicId = storedPublicId;
     if (publicId && cloudinaryConfigured) {
       await cloudinary.uploader.destroy(publicId, { invalidate: true }).catch((error) => {
         console.warn("Cloudinary avatar delete failed:", error.message);
@@ -1124,7 +1216,7 @@ app.delete("/api/upload/avatar", async (req, res) => {
   }
 });
 
-app.patch("/api/users/password", async (req, res) => {
+app.patch("/api/users/password", rateLimiters.account, async (req, res) => {
   try {
     const user = await requireUser(requestToken(req));
     await changeUserPassword(user, req.body);
@@ -1134,7 +1226,7 @@ app.patch("/api/users/password", async (req, res) => {
   }
 });
 
-app.delete("/api/users/profile", async (req, res) => {
+app.delete("/api/users/profile", rateLimiters.account, async (req, res) => {
   try {
     const user = await requireUser(requestToken(req));
     await deleteUserAccount(user.id);
@@ -1347,6 +1439,8 @@ app.get("/api/calls/ice-config", async (req, res) => {
     res.json({
       iceServers: callIceServers(),
       iceCandidatePoolSize: 10,
+      iceTransportPolicy: process.env.CALL_ICE_TRANSPORT_POLICY === "relay" ? "relay" : "all",
+      turnEnabled: callTurnEnabled(),
     });
   } catch (error) {
     handleError(res, error);
@@ -1426,6 +1520,28 @@ app.patch("/api/dms/threads/:threadId/seen", rateLimiters.message, async (req, r
       success: true,
       ...result,
     });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.patch("/api/dms/threads/:threadId/preferences", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    const thread = await updateDmThreadPreferences(req.params.threadId, user, req.body || {});
+    res.json({ success: true, thread });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.delete("/api/dms/threads/:threadId", async (req, res) => {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    await removeDmThreadForUser(req.params.threadId, user);
+    res.json({ success: true, threadId: req.params.threadId });
   } catch (error) {
     handleError(res, error);
   }
@@ -1522,23 +1638,21 @@ app.get("/api/messages", rateLimiters.message, async (req, res) => {
     if (!room) throw createHttpError(404, "Room not found.");
     await requireRoomEntry(room, user);
 
-    const limit = Math.max(1, Math.min(Number.parseInt(req.query.limit || "50", 10) || 50, 100));
-    const beforeTime = req.query.before ? new Date(String(req.query.before)).getTime() : 0;
+    const limit = paginationLimit(req.query.limit, 50, 100);
     const query = {
       roomId: room.id,
       hidden: { $ne: true },
     };
-
-    if (Number.isFinite(beforeTime) && beforeTime > 0) {
-      query.createdAt = { $lt: beforeTime };
-    }
+    applyCursorFilter(query, req.query.cursor || req.query.before);
 
     const blockedIds = await blockedAuthorIds(user);
-    const messages = await db.collection("messages")
+    const page = await db.collection("messages")
       .find(query)
-      .sort({ createdAt: -1 })
-      .limit(limit)
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit + 1)
       .toArray();
+    const hasMore = page.length > limit;
+    const messages = page.slice(0, limit);
 
     res.json({
       roomId: room.id,
@@ -1546,6 +1660,8 @@ app.get("/api/messages", rateLimiters.message, async (req, res) => {
         .reverse()
         .filter((message) => !blockedIds.has(String(message.authorId || "")))
         .map(serializeMessage),
+      hasMore,
+      nextCursor: hasMore && messages.length ? encodePaginationCursor(messages[0]) : null,
     });
   } catch (error) {
     handleError(res, error);
@@ -1667,6 +1783,8 @@ app.post("/api/reports", rateLimiters.report, async (req, res) => {
   }
 });
 
+app.use("/api/admin", rateLimiters.admin);
+
 app.post("/api/admin/state", async (req, res) => {
   try {
     await requireAdmin(requestToken(req));
@@ -1688,8 +1806,25 @@ app.get("/api/admin/stats", async (req, res) => {
 app.get("/api/admin/users", async (req, res) => {
   try {
     await requireAdmin(requestToken(req));
-    const adminState = await createAdminState();
-    res.json({ users: adminState.users });
+    const search = cleanText(req.query.search || "", 80);
+    const filter = search
+      ? {
+          $or: [
+            { fullName: new RegExp(escapeRegExp(search), "i") },
+            { username: new RegExp(escapeRegExp(search), "i") },
+            { email: new RegExp(escapeRegExp(search), "i") },
+          ],
+        }
+      : {};
+    const { page, limit, skip } = paginationPage(req.query, 100, 250);
+    const [users, total] = await Promise.all([
+      db.collection("users").find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).toArray(),
+      db.collection("users").countDocuments(filter),
+    ]);
+    res.json({
+      users: users.map((user) => sanitizeAdminUser(removeMongoId(user))),
+      pagination: paginationMeta(page, limit, total),
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -1708,8 +1843,21 @@ app.get("/api/admin/rooms", async (req, res) => {
 app.get("/api/admin/messages", async (req, res) => {
   try {
     await requireAdmin(requestToken(req));
-    const messages = await db.collection("messages").find().sort({ createdAt: -1 }).limit(500).toArray();
-    res.json({ messages: messages.map(serializeMessage) });
+    const limit = paginationLimit(req.query.limit, 100, 250);
+    const filter = {};
+    applyCursorFilter(filter, req.query.cursor || req.query.before);
+    const page = await db.collection("messages")
+      .find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit + 1)
+      .toArray();
+    const hasMore = page.length > limit;
+    const messages = page.slice(0, limit);
+    res.json({
+      messages: messages.map(serializeMessage),
+      hasMore,
+      nextCursor: hasMore && messages.length ? encodePaginationCursor(messages[messages.length - 1]) : null,
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -1751,30 +1899,38 @@ app.get("/api/admin/message-users", async (req, res) => {
 app.get("/api/admin/user-messages/:userId", async (req, res) => {
   try {
     await requireAdmin(requestToken(req));
+    const limit = paginationLimit(req.query.limit, 100, 150);
     const filter = { authorId: req.params.userId };
+    applyCursorFilter(filter, req.query.cursor || req.query.before);
     const [rawMessages, totalMessages] = await Promise.all([
       models.Message.find(filter)
         .sort({ createdAt: -1, _id: -1 })
-        .limit(150)
+        .limit(limit + 1)
         .lean({ virtuals: false }),
-      models.Message.countDocuments(filter),
+      models.Message.countDocuments({ authorId: req.params.userId }),
     ]);
 
+    const hasMore = rawMessages.length > limit;
+    const pageMessages = rawMessages.slice(0, limit);
     const seen = new Set();
-    const messages = normalizeDocument(rawMessages)
+    const messages = normalizeDocument(pageMessages)
       .filter((message) => {
         const id = String(message.id || message._id || "");
         if (!id || seen.has(id)) return false;
         seen.add(id);
         return true;
       })
-      .slice(0, 100)
       .map((message) => {
         const id = String(message.id || message._id || "");
         return { ...removeMongoId(message), id };
       });
 
-    res.json({ messages, totalMessages });
+    res.json({
+      messages,
+      totalMessages,
+      hasMore,
+      nextCursor: hasMore && pageMessages.length ? encodePaginationCursor(pageMessages[pageMessages.length - 1]) : null,
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -1783,8 +1939,40 @@ app.get("/api/admin/user-messages/:userId", async (req, res) => {
 app.get("/api/admin/reports", async (req, res) => {
   try {
     await requireAdmin(requestToken(req));
-    const adminState = await createAdminState();
-    res.json({ reports: adminState.reports });
+    const { page, limit, skip } = paginationPage(req.query, 100, 250);
+    const status = cleanText(req.query.status || "", 30);
+    const filter = ["open", "hidden", "dismissed", "deleted"].includes(status) ? { status } : {};
+    const [reports, total] = await Promise.all([
+      db.collection("reports").find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).toArray(),
+      db.collection("reports").countDocuments(filter),
+    ]);
+    res.json({
+      reports: await hydrateAdminReports(reports),
+      pagination: paginationMeta(page, limit, total),
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.get("/api/admin/audit-logs", async (req, res) => {
+  try {
+    await requireAdmin(requestToken(req));
+    const { page, limit, skip } = paginationPage(req.query, 100, 200);
+    const action = cleanText(req.query.action || "", 80);
+    const targetType = cleanText(req.query.targetType || "", 40);
+    const filter = {
+      ...(action ? { action } : {}),
+      ...(AUDIT_TARGET_TYPES.has(targetType) ? { targetType } : {}),
+    };
+    const [logs, total] = await Promise.all([
+      db.collection("adminAuditLogs").find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).toArray(),
+      db.collection("adminAuditLogs").countDocuments(filter),
+    ]);
+    res.json({
+      auditLogs: logs.map(removeMongoId),
+      pagination: paginationMeta(page, limit, total),
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -1803,11 +1991,46 @@ app.get("/api/admin/blocked-users", async (req, res) => {
 app.patch("/api/admin/reports/:reportId", async (req, res) => {
   try {
     const admin = await requireAdmin(requestToken(req));
-    const report = await updateReport(req.params.reportId, req.body.action, admin);
-    await writeAdminAudit(admin, `report:${req.body.action}`, { reportId: req.params.reportId });
+    const report = await updateReport(req.params.reportId, req.body.action, admin, req.body.note);
+    await writeAdminAudit(admin, `report:${req.body.action}`, {
+      reportId: req.params.reportId,
+      note: cleanText(req.body.note || "", 300),
+    });
 
     await broadcastState();
     res.json({ report });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.patch("/api/admin/reports", async (req, res) => {
+  try {
+    const admin = await requireAdmin(requestToken(req));
+    const reportIds = [...new Set((Array.isArray(req.body.reportIds) ? req.body.reportIds : []).map((id) => cleanText(id, 80)).filter(Boolean))];
+    const action = cleanText(req.body.action, 40);
+    const note = cleanText(req.body.note || "", 300);
+    if (!["hide", "dismiss", "resolve", "restore", "delete"].includes(action)) {
+      throw createHttpError(400, "Unknown moderation action.");
+    }
+    if (!reportIds.length) throw createHttpError(400, "Select at least one report.");
+    if (reportIds.length > 50) throw createHttpError(400, "You can moderate up to 50 reports at once.");
+    const existingReports = await db.collection("reports").find({ id: { $in: reportIds } }).toArray();
+    if (existingReports.length !== reportIds.length) throw createHttpError(404, "One or more reports no longer exist.");
+
+    const updated = [];
+    for (const reportId of reportIds) {
+      updated.push(await updateReport(reportId, action, admin, note));
+    }
+
+    await writeAdminAudit(admin, `report:bulk-${action}`, {
+      reportIds,
+      action,
+      note,
+      count: updated.length,
+    });
+    await broadcastState();
+    res.json({ reports: updated.map(removeMongoId), count: updated.length });
   } catch (error) {
     handleError(res, error);
   }
@@ -2684,6 +2907,17 @@ async function sendPasswordResetOtp(user, otp) {
   return true;
 }
 
+async function requireActiveUserRequest(req, res, next) {
+  try {
+    const user = await requireUser(requestToken(req));
+    ensureActiveUser(user);
+    req.authUser = user;
+    next();
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
 function runSingleUpload(fieldName) {
   return (req, res, next) => {
     uploadMemory.single(fieldName)(req, res, (error) => {
@@ -2703,11 +2937,11 @@ function runSingleUpload(fieldName) {
 
 async function uploadChatFile(file, user) {
   const mimeType = normalizeMimeType(file.mimetype || "application/octet-stream");
-  const name = cleanText(file.originalname || "attachment", 120);
+  const name = sanitizeUploadFilename(file.originalname || "attachment");
   const size = Number(file.size || 0);
   const kind = attachmentKindFromMime(mimeType);
 
-  validateUploadPayload({ mimeType, size, kind });
+  validateUploadPayload({ mimeType, size, kind, buffer: file.buffer });
 
   const dataUrl = bufferToDataUrl(file.buffer, mimeType);
   const uploaded = await uploadBase64Media({
@@ -2743,6 +2977,7 @@ async function uploadBase64Media({ dataUrl, folder, allowedKinds, maxBytes = MAX
     kind,
     maxBytes,
     dataUrl,
+    buffer: parsed.buffer,
   });
 
   if (!cloudinaryConfigured) {
@@ -2760,7 +2995,8 @@ async function uploadBase64Media({ dataUrl, folder, allowedKinds, maxBytes = MAX
     folder,
     public_id: publicId || undefined,
     resource_type: "auto",
-    overwrite: true,
+    overwrite: false,
+    invalidate: true,
   });
 
   return {
@@ -2780,8 +3016,9 @@ function parseDataUrl(dataUrl) {
 
   const mimeType = normalizeMimeType(match[1]);
   const base64 = match[2].replace(/\s/g, "");
-  const size = Buffer.byteLength(base64, "base64");
-  return { mimeType, base64, size };
+  const buffer = Buffer.from(base64, "base64");
+  const size = buffer.length;
+  return { mimeType, base64, buffer, size };
 }
 
 function bufferToDataUrl(buffer, mimeType) {
@@ -2800,7 +3037,17 @@ function normalizeMimeType(mimeType) {
   return cleanText(String(mimeType || "application/octet-stream").split(";")[0].trim().toLowerCase(), 120) || "application/octet-stream";
 }
 
-function validateUploadPayload({ mimeType, size, kind, maxBytes = MAX_ATTACHMENT_BYTES, dataUrl = "" }) {
+function sanitizeUploadFilename(value) {
+  const rawName = String(value || "attachment").split(/[\\/]/).pop() || "attachment";
+  const base = path.basename(rawName)
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[<>:"/\\|?*]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleanText(base || "attachment", 120);
+}
+
+function validateUploadPayload({ mimeType, size, kind, maxBytes = MAX_ATTACHMENT_BYTES, dataUrl = "", buffer = null }) {
   if (!ALLOWED_ATTACHMENT_TYPES.has(mimeType)) {
     throw createHttpError(400, "This file type is not supported yet.");
   }
@@ -2816,6 +3063,71 @@ function validateUploadPayload({ mimeType, size, kind, maxBytes = MAX_ATTACHMENT
   if (dataUrl && dataUrl.length > maxBytes * 1.5 + 200) {
     throw createHttpError(400, `File is too large. Keep uploads under ${Math.round(maxBytes / 1024 / 1024)} MB.`);
   }
+
+  if (buffer) validateUploadFileContent(buffer, mimeType);
+}
+
+function validateUploadFileContent(input, declaredMimeType) {
+  const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input || []);
+  const mimeType = normalizeMimeType(declaredMimeType);
+  const signature = detectUploadSignature(buffer);
+  const officeZipTypes = new Set([
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ]);
+  const officeLegacyTypes = new Set([
+    "application/msword",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.ms-excel",
+  ]);
+
+  let matches = signature === mimeType;
+  if (officeZipTypes.has(mimeType)) matches = signature === "application/zip";
+  if (officeLegacyTypes.has(mimeType)) matches = signature === "application/x-ole-storage";
+  if (["audio/mp4", "video/mp4", "video/quicktime"].includes(mimeType)) matches = signature === "video/mp4";
+  if (["audio/webm", "video/webm"].includes(mimeType)) matches = signature === "video/webm";
+
+  if (!matches) {
+    throw createHttpError(400, "File contents do not match the selected file type.");
+  }
+}
+
+function detectUploadSignature(buffer) {
+  if (!buffer?.length) return "";
+  const prefix = buffer.subarray(0, 16);
+  const ascii = prefix.toString("ascii");
+
+  if (startsWithBytes(prefix, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
+  if (startsWithBytes(prefix, [0xff, 0xd8, 0xff])) return "image/jpeg";
+  if (ascii.startsWith("GIF87a") || ascii.startsWith("GIF89a")) return "image/gif";
+  if (ascii.startsWith("RIFF") && buffer.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  if (ascii.startsWith("%PDF-")) return "application/pdf";
+  if (startsWithBytes(prefix, [0x50, 0x4b, 0x03, 0x04]) || startsWithBytes(prefix, [0x50, 0x4b, 0x05, 0x06])) return "application/zip";
+  if (startsWithBytes(prefix, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])) return "application/x-ole-storage";
+  if (ascii.startsWith("RIFF") && buffer.subarray(8, 12).toString("ascii") === "WAVE") return "audio/wav";
+  if (ascii.startsWith("OggS")) return "audio/ogg";
+  if (ascii.startsWith("ID3") || (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0)) return "audio/mpeg";
+  if (buffer.length >= 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp") return "video/mp4";
+  if (startsWithBytes(prefix, [0x1a, 0x45, 0xdf, 0xa3])) return "video/webm";
+  if (looksLikePlainText(buffer)) return "text/plain";
+  return "";
+}
+
+function startsWithBytes(buffer, bytes) {
+  return bytes.every((value, index) => buffer[index] === value);
+}
+
+function looksLikePlainText(buffer) {
+  const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
+  if (sample.includes(0)) return false;
+  const text = sample.toString("utf8");
+  if (text.includes("\ufffd")) return false;
+  let printable = 0;
+  for (const byte of sample) {
+    if (byte === 9 || byte === 10 || byte === 13 || byte >= 32) printable += 1;
+  }
+  return printable / Math.max(1, sample.length) > 0.92;
 }
 
 function resetIsExpired(reset) {
@@ -3184,6 +3496,16 @@ async function createReport(messageId, reason, reporterId) {
   const message = await db.collection("messages").findOne({ id: messageId });
 
   if (!message) throw createHttpError(404, "Message not found.");
+  if (String(message.authorId || "") === String(reporterId || "")) {
+    throw createHttpError(400, "You cannot report your own message.");
+  }
+
+  const existing = await db.collection("reports").findOne({
+    messagePublicId: message.id,
+    reporterPublicId: reporterId,
+    status: { $in: ["open", "hidden"] },
+  });
+  if (existing) throw createHttpError(409, "You already reported this message.");
 
   const reporter = await db.collection("users").findOne({ id: reporterId });
   const reportedUser = message.authorId ? await db.collection("users").findOne({ id: message.authorId }) : null;
@@ -3205,6 +3527,8 @@ async function createReport(messageId, reason, reporterId) {
     message: removeMongoId(message),
     createdAt: Date.now(),
     resolvedAt: null,
+    adminNote: "",
+    actionHistory: [],
   };
 
   await db.collection("messages").updateOne(
@@ -3228,18 +3552,33 @@ async function createReport(messageId, reason, reporterId) {
   return report;
 }
 
-async function updateReport(reportId, action, admin = null) {
+async function updateReport(reportId, action, admin = null, note = "") {
   const report = await db.collection("reports").findOne({ id: reportId });
 
   if (!report) throw createHttpError(404, "Report not found.");
 
   const message = await findMessageForReport(report);
   const resolver = admin ? objectIdFromValue(admin.id) : null;
+  const moderationAction = cleanText(action, 40);
+  const adminNote = cleanText(note || "", 300);
+  const allowedActions = new Set(["hide", "dismiss", "resolve", "restore", "delete"]);
+  if (!allowedActions.has(moderationAction)) throw createHttpError(400, "Unknown moderation action.");
 
-  if (action === "hide") {
+  const historyEntry = {
+    action: moderationAction,
+    note: adminNote,
+    adminPublicId: admin?.id || "site-admin",
+    adminName: admin?.name || ADMIN_NAME,
+    createdAt: Date.now(),
+  };
+
+  if (moderationAction === "hide") {
     await db.collection("reports").updateOne(
       { id: reportId },
-      { $set: { status: "hidden", resolvedAt: Date.now(), resolvedBy: resolver } }
+      {
+        $set: { status: "hidden", resolvedAt: Date.now(), resolvedBy: resolver, adminNote },
+        $push: { actionHistory: historyEntry },
+      }
     );
 
     if (message) {
@@ -3248,10 +3587,13 @@ async function updateReport(reportId, action, admin = null) {
         { $set: { hidden: true, reported: true } }
       );
     }
-  } else if (action === "dismiss") {
+  } else if (moderationAction === "dismiss") {
     await db.collection("reports").updateOne(
       { id: reportId },
-      { $set: { status: "dismissed", resolvedAt: Date.now(), resolvedBy: resolver } }
+      {
+        $set: { status: "dismissed", resolvedAt: Date.now(), resolvedBy: resolver, adminNote },
+        $push: { actionHistory: historyEntry },
+      }
     );
 
     if (message) {
@@ -3260,10 +3602,13 @@ async function updateReport(reportId, action, admin = null) {
         { $set: { reported: false } }
       );
     }
-  } else if (action === "resolve") {
+  } else if (moderationAction === "resolve") {
     await db.collection("reports").updateOne(
       { id: reportId },
-      { $set: { status: "hidden", resolvedAt: Date.now(), resolvedBy: resolver, adminNote: "Resolved by admin action." } }
+      {
+        $set: { status: "hidden", resolvedAt: Date.now(), resolvedBy: resolver, adminNote: adminNote || "Resolved by admin action." },
+        $push: { actionHistory: historyEntry },
+      }
     );
 
     if (message) {
@@ -3272,10 +3617,13 @@ async function updateReport(reportId, action, admin = null) {
         { $set: { reported: true, hidden: true } }
       );
     }
-  } else if (action === "restore") {
+  } else if (moderationAction === "restore") {
     await db.collection("reports").updateOne(
       { id: reportId },
-      { $set: { status: "open", resolvedAt: null, resolvedBy: null, adminNote: "" } }
+      {
+        $set: { status: "open", resolvedAt: null, resolvedBy: null, adminNote },
+        $push: { actionHistory: historyEntry },
+      }
     );
 
     if (message) {
@@ -3284,17 +3632,18 @@ async function updateReport(reportId, action, admin = null) {
         { $set: { hidden: false, reported: true } }
       );
     }
-  } else if (action === "delete") {
+  } else if (moderationAction === "delete") {
     if (message) {
       await db.collection("messages").deleteOne({ id: message.id });
     }
 
     await db.collection("reports").updateOne(
       { id: reportId },
-      { $set: { status: "deleted", resolvedAt: Date.now(), resolvedBy: resolver } }
+      {
+        $set: { status: "deleted", resolvedAt: Date.now(), resolvedBy: resolver, adminNote },
+        $push: { actionHistory: historyEntry },
+      }
     );
-  } else {
-    throw createHttpError(400, "Unknown moderation action.");
   }
 
   return await db.collection("reports").findOne({ id: reportId });
@@ -3420,6 +3769,10 @@ async function updateProfile(user, profile) {
     }
 
     updates.avatarDataUrl = avatarDataUrl;
+  }
+
+  if (typeof profile.avatarPublicId === "string") {
+    updates.avatarPublicId = cleanText(profile.avatarPublicId, 180);
   }
 
   await db.collection("users").updateOne({ id: user.id }, { $set: updates });
@@ -3593,10 +3946,16 @@ async function updateUserStatus(userId, status, reason, admin) {
   const user = await db.collection("users").findOne({ id: userId });
 
   if (!user) throw createHttpError(404, "User not found.");
+  const suspensionReason = cleanText(reason || "", 160);
+  if (nextStatus === "suspended" && suspensionReason.length < 3) {
+    throw createHttpError(400, "Add a clear suspension reason.");
+  }
 
   const updates = {
     status: nextStatus,
-    suspensionReason: nextStatus === "suspended" ? cleanText(reason || "Moderation action", 160) : "",
+    suspensionReason: nextStatus === "suspended" ? suspensionReason : "",
+    suspendedAt: nextStatus === "suspended" ? Date.now() : null,
+    suspendedBy: nextStatus === "suspended" ? admin?.id || "site-admin" : "",
     updatedAt: Date.now(),
   };
 
@@ -3736,18 +4095,18 @@ async function createSession(userId, type) {
 
 async function createPublicState(user = null) {
   try {
-    const rooms = await getCachedRooms();
-    const messages = await recentVisibleMessages({}, 25);
-    const announcements = await db.collection("announcements").find({ status: "published" }).sort({ createdAt: -1 }).limit(30).toArray();
-    const usersCount = await db.collection("users").countDocuments();
-    const openReports = await db.collection("reports").countDocuments({ status: "open" });
-    const hiddenMessages = await db.collection("messages").countDocuments({ hidden: true });
-    const activeUserIds = activeSocketUserIds();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const messagesToday = await db.collection("messages").countDocuments({
-      createdAt: { $gte: today },
-    });
+    const [rooms, messages, announcements, usersCount, openReports, hiddenMessages, messagesToday] = await Promise.all([
+      getCachedRooms(),
+      recentVisibleMessages({}, 25),
+      db.collection("announcements").find({ status: "published" }).sort({ createdAt: -1 }).limit(30).toArray(),
+      db.collection("users").countDocuments(),
+      db.collection("reports").countDocuments({ status: "open" }),
+      db.collection("messages").countDocuments({ hidden: true }),
+      db.collection("messages").countDocuments({ createdAt: { $gte: today } }),
+    ]);
+    const activeUserIds = activeSocketUserIds();
     const accessSet = verifiedRoomIdsForUser(user);
     const filteredMessages = await filterMessagesForUser(messages, rooms, user);
     const presenceIds = [
@@ -3812,27 +4171,24 @@ async function createPublicState(user = null) {
 }
 
 async function createAdminState() {
-  const users = await db.collection("users").find().sort({ createdAt: -1 }).toArray();
-  const reports = await db.collection("reports").find().sort({ createdAt: -1 }).toArray();
-  const messages = await db.collection("messages").find().toArray();
-  const deletedUsers = await db.collection("deletedUsers").find().sort({ deletedAt: -1 }).toArray();
-  const auditLogs = await db.collection("adminAuditLogs").find().sort({ createdAt: -1 }).limit(80).toArray();
-  const announcements = await db.collection("announcements").find().sort({ createdAt: -1 }).limit(80).toArray();
-
-  const hydratedReports = reports.map((report) => {
-    const message = messages.find((item) => item.id === report.messagePublicId || item._id === report.messageId);
-    const reporter = users.find((item) => item.id === report.reporterPublicId || item._id === report.reporterId);
-
-    return removeMongoId({
-      ...report,
-      messageId: report.messagePublicId || report.messageId,
-      reporterId: report.reporterPublicId || report.reporterId,
-      reportedUserId: report.reportedUserPublicId || report.reportedUserId,
-      reason: report.reasonText || report.reason,
-      message: message ? removeMongoId(message) : null,
-      reporterName: reporter ? reporter.anonymousName : report.reporterName || "Campus member",
-    });
-  });
+  const [users, reports, messages, deletedUsers, auditLogs, announcements, rooms, stats, totals] = await Promise.all([
+    db.collection("users").find().sort({ createdAt: -1 }).limit(100).toArray(),
+    db.collection("reports").find().sort({ createdAt: -1 }).limit(100).toArray(),
+    db.collection("messages").find().sort({ createdAt: -1, _id: -1 }).limit(150).toArray(),
+    db.collection("deletedUsers").find().sort({ deletedAt: -1 }).limit(50).toArray(),
+    db.collection("adminAuditLogs").find().sort({ createdAt: -1 }).limit(80).toArray(),
+    db.collection("announcements").find().sort({ createdAt: -1 }).limit(80).toArray(),
+    db.collection("rooms").find().sort({ createdAt: 1 }).toArray(),
+    createAdminStats(),
+    Promise.all([
+      db.collection("users").countDocuments(),
+      db.collection("reports").countDocuments(),
+      db.collection("messages").countDocuments(),
+      db.collection("deletedUsers").countDocuments(),
+    ]),
+  ]);
+  const hydratedReports = await hydrateAdminReports(reports, users);
+  const [usersTotal, reportsTotal, messagesTotal, deletedUsersTotal] = totals;
 
   return {
     users: users.map((user) => sanitizeAdminUser(removeMongoId(user))),
@@ -3841,19 +4197,62 @@ async function createAdminState() {
     deletedUsers: deletedUsers.map(removeMongoId),
     auditLogs: auditLogs.map(removeMongoId),
     announcements: announcements.map(removeMongoId),
-    stats: await createAdminStats(),
+    rooms: rooms.map(removeMongoId),
+    pagination: {
+      users: paginationMeta(1, 100, usersTotal),
+      reports: paginationMeta(1, 100, reportsTotal),
+      messages: paginationMeta(1, 150, messagesTotal),
+      deletedUsers: paginationMeta(1, 50, deletedUsersTotal),
+    },
+    stats,
   };
+}
+
+async function hydrateAdminReports(reports = [], knownUsers = []) {
+  const messageIds = reports
+    .filter((report) => !report.message && report.messagePublicId)
+    .map((report) => String(report.messagePublicId));
+  const reporterIds = reports
+    .map((report) => String(report.reporterPublicId || ""))
+    .filter(Boolean);
+  const knownUserMap = new Map(knownUsers.map((user) => [String(user.id || ""), user]));
+  const missingReporterIds = [...new Set(reporterIds.filter((id) => !knownUserMap.has(id)))];
+  const [messages, reporters] = await Promise.all([
+    messageIds.length
+      ? db.collection("messages").find({ id: { $in: [...new Set(messageIds)] } }).toArray()
+      : [],
+    missingReporterIds.length
+      ? db.collection("users").find({ id: { $in: missingReporterIds } }).toArray()
+      : [],
+  ]);
+  reporters.forEach((user) => knownUserMap.set(String(user.id || ""), user));
+  const messageMap = new Map(messages.map((message) => [String(message.id || ""), message]));
+
+  return reports.map((report) => {
+    const message = report.message || messageMap.get(String(report.messagePublicId || ""));
+    const reporter = knownUserMap.get(String(report.reporterPublicId || ""));
+    return removeMongoId({
+      ...report,
+      messageId: report.messagePublicId || report.messageId,
+      reporterId: report.reporterPublicId || report.reporterId,
+      reportedUserId: report.reportedUserPublicId || report.reportedUserId,
+      reason: report.reasonText || report.reason,
+      message: message ? removeMongoId(message) : null,
+      reporterName: reporter?.anonymousName || reporter?.fullName || report.reporterName || "Campus member",
+    });
+  });
 }
 
 async function createAdminStats() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const [totalUsers, activeUsers, activeRooms, messagesToday, reportsPending, callsToday, totalCalls] = await Promise.all([
+  const [totalUsers, activeUsers, suspendedUsers, activeRooms, messagesToday, reportsPending, callsToday, totalCalls] = await Promise.all([
     db.collection("users").countDocuments({
       role: { $ne: "admin" },
-      status: { $ne: "deleted" },
+      status: "active",
     }),
+    db.collection("users").countDocuments({ role: { $ne: "admin" }, status: "suspended" }),
     db.collection("users").countDocuments({
       role: { $ne: "admin" },
       status: { $ne: "deleted" },
@@ -3875,6 +4274,7 @@ async function createAdminStats() {
   return {
     totalUsers,
     activeUsers,
+    suspendedUsers,
     activeRooms,
     messagesToday,
     reportsPending,
@@ -4371,6 +4771,64 @@ function timestampValue(value) {
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 }
 
+function paginationLimit(value, fallback = 50, maximum = 100) {
+  const parsed = Number.parseInt(value, 10);
+  return Math.max(1, Math.min(Number.isFinite(parsed) ? parsed : fallback, maximum));
+}
+
+function paginationPage(query = {}, fallbackLimit = 100, maximumLimit = 250) {
+  const page = Math.max(1, Number.parseInt(query.page || "1", 10) || 1);
+  const limit = paginationLimit(query.limit, fallbackLimit, maximumLimit);
+  return { page, limit, skip: (page - 1) * limit };
+}
+
+function paginationMeta(page, limit, total) {
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  return { page, limit, total, totalPages, hasMore: page < totalPages };
+}
+
+function encodePaginationCursor(document = {}) {
+  const timestamp = timestampValue(document.createdAt);
+  const id = String(document._id || "");
+  if (!timestamp) return null;
+  return Buffer.from(JSON.stringify({ timestamp, id })).toString("base64url");
+}
+
+function decodePaginationCursor(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  try {
+    const decoded = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+    const timestamp = Number(decoded.timestamp);
+    if (Number.isFinite(timestamp) && timestamp > 0) {
+      return { timestamp, id: String(decoded.id || "") };
+    }
+  } catch {
+    const timestamp = new Date(raw).getTime();
+    if (Number.isFinite(timestamp) && timestamp > 0) return { timestamp, id: "" };
+  }
+
+  return null;
+}
+
+function applyCursorFilter(filter, value) {
+  const cursor = decodePaginationCursor(value);
+  if (!cursor) return filter;
+
+  const createdAt = new Date(cursor.timestamp);
+  if (cursor.id && mongoose.Types.ObjectId.isValid(cursor.id)) {
+    filter.$or = [
+      { createdAt: { $lt: createdAt } },
+      { createdAt, _id: { $lt: new mongoose.Types.ObjectId(cursor.id) } },
+    ];
+  } else {
+    filter.createdAt = { $lt: createdAt };
+  }
+
+  return filter;
+}
+
 function socialObjectIdForUser(user) {
   return user?._id && isMongoObjectId(user._id) ? objectIdFromValue(user._id) : null;
 }
@@ -4816,6 +5274,9 @@ function serializeDmThread(thread = {}, viewerId = "", users = new Map(), lastMe
     _id: normalized._id ? String(normalized._id) : undefined,
     participantIds,
     participant: friendUser ? publicUserCard(friendUser, relationship) : null,
+    pinned: (normalized.pinnedForUserIds || []).map(String).includes(String(viewerId)),
+    muted: (normalized.mutedForUserIds || []).map(String).includes(String(viewerId)),
+    archived: (normalized.archivedForUserIds || []).map(String).includes(String(viewerId)),
     unreadCount: Math.max(0, Number(unreadByUserId[String(viewerId)] || 0)),
     lastMessageText: normalized.lastMessageText || (lastMessage ? dmMessagePreview(lastMessage) : ""),
     lastMessageAt: timestampValue(normalized.lastMessageAt || normalized.updatedAt || normalized.createdAt),
@@ -4832,6 +5293,7 @@ async function findDmThreadForUser(threadId, user) {
     id,
     participantIds: user.id,
     status: { $ne: "deleted" },
+    hiddenForUserIds: { $ne: user.id },
   });
   if (!thread) throw createHttpError(404, "Personal chat not found.");
   return thread;
@@ -4878,6 +5340,9 @@ async function getOrCreateDmThread(user, targetUserId) {
       lastMessageText: "",
       lastMessageAt: null,
       hiddenForUserIds: [],
+      pinnedForUserIds: [],
+      mutedForUserIds: [],
+      archivedForUserIds: [],
       unreadByUserId: {
         [String(user.id)]: 0,
         [String(target.id)]: 0,
@@ -4928,28 +5393,28 @@ async function getDmReplyPreview(messageId, threadId) {
 
 async function listDmMessagesForThread(user, threadId, query = {}) {
   const thread = await findDmThreadForUser(threadId, user);
-  const limit = Math.max(1, Math.min(Number.parseInt(query.limit || "50", 10) || 50, 100));
-  const beforeTime = query.before ? new Date(String(query.before)).getTime() : 0;
+  const limit = paginationLimit(query.limit, 50, 100);
   const filters = {
     threadId: thread.id,
     hiddenForUserIds: { $ne: user.id },
   };
+  applyCursorFilter(filters, query.cursor || query.before);
 
-  if (Number.isFinite(beforeTime) && beforeTime > 0) {
-    filters.createdAt = { $lt: beforeTime };
-  }
-
-  const messages = await db.collection("dmMessages")
+  const page = await db.collection("dmMessages")
     .find(filters)
-    .sort({ createdAt: -1 })
-    .limit(limit)
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(limit + 1)
     .toArray();
+  const hasMore = page.length > limit;
+  const messages = page.slice(0, limit);
   const users = await dmUsersForThreads([thread]);
 
   return {
     thread: serializeDmThread(thread, user.id, users),
     threadId: thread.id,
     messages: messages.reverse().map(serializeDmMessage),
+    hasMore,
+    nextCursor: hasMore && messages.length ? encodePaginationCursor(messages[0]) : null,
   };
 }
 
@@ -5028,6 +5493,7 @@ async function createDmMessage(user, threadId, body = {}) {
       },
       $pull: {
         hiddenForUserIds: { $in: [String(user.id), String(recipientId)] },
+        archivedForUserIds: { $in: [String(user.id), String(recipientId)] },
       },
     }
   );
@@ -5093,6 +5559,81 @@ async function markDmThreadSeen(threadId, user, options = {}) {
   };
 }
 
+async function updateDmThreadPreferences(threadId, user, input = {}) {
+  const thread = await findDmThreadForUser(threadId, user);
+  const supported = {
+    pinned: "pinnedForUserIds",
+    muted: "mutedForUserIds",
+    archived: "archivedForUserIds",
+  };
+  const addToSet = {};
+  const pull = {};
+
+  Object.entries(supported).forEach(([key, field]) => {
+    if (!Object.prototype.hasOwnProperty.call(input, key)) return;
+    if (Boolean(input[key])) addToSet[field] = user.id;
+    else pull[field] = user.id;
+  });
+  if (!Object.keys(addToSet).length && !Object.keys(pull).length) {
+    throw createHttpError(400, "No DM preference was provided.");
+  }
+
+  const update = {};
+  if (Object.keys(addToSet).length) update.$addToSet = addToSet;
+  if (Object.keys(pull).length) update.$pull = pull;
+  await db.collection("dmThreads").updateOne({ id: thread.id }, update);
+  const updated = await db.collection("dmThreads").findOne({ id: thread.id });
+  const users = await dmUsersForThreads([updated]);
+  return serializeDmThread(updated, user.id, users);
+}
+
+async function removeDmThreadForUser(threadId, user) {
+  const thread = await findDmThreadForUser(threadId, user);
+  await db.collection("dmThreads").updateOne(
+    { id: thread.id },
+    {
+      $addToSet: { hiddenForUserIds: user.id },
+      $pull: {
+        pinnedForUserIds: user.id,
+        mutedForUserIds: user.id,
+        archivedForUserIds: user.id,
+      },
+      $set: { [`unreadByUserId.${String(user.id)}`]: 0 },
+    }
+  );
+}
+
+async function markDmMessageDelivered(messageId, user) {
+  const id = cleanText(messageId, 80);
+  if (!id) throw createHttpError(400, "Message is required.");
+  const message = await db.collection("dmMessages").findOne({ id });
+  if (!message) throw createHttpError(404, "Message not found.");
+  if (String(message.recipientId || "") !== String(user.id || "")) {
+    throw createHttpError(403, "Only the recipient can confirm delivery.");
+  }
+
+  await findDmThreadForUser(message.threadId, user);
+  const deliveredTo = Array.isArray(message.delivery?.deliveredTo)
+    ? message.delivery.deliveredTo.map(String)
+    : [];
+  if (!deliveredTo.includes(String(user.id))) {
+    await db.collection("dmMessages").updateOne(
+      { id: message.id, recipientId: user.id },
+      { $addToSet: { "delivery.deliveredTo": user.id } }
+    );
+  }
+
+  const updatedMessage = await db.collection("dmMessages").findOne({ id: message.id });
+  const payload = {
+    threadId: updatedMessage.threadId,
+    userId: user.id,
+    deliveredAt: Date.now(),
+    message: serializeDmMessage(updatedMessage),
+  };
+  emitToUser(updatedMessage.senderId, "dm:delivery", payload);
+  return payload;
+}
+
 async function emitDmThreadUpdate(thread) {
   if (!thread?.id) return;
   const users = await dmUsersForThreads([thread]);
@@ -5118,7 +5659,8 @@ async function emitDmMessageNew(thread, message) {
   const unreadByUserId = plainMapValue(thread.unreadByUserId);
   const recipientIds = (thread.participantIds || [])
     .map(String)
-    .filter((participantId) => participantId !== String(message.senderId || ""));
+    .filter((participantId) => participantId !== String(message.senderId || ""))
+    .filter((participantId) => !(thread.mutedForUserIds || []).map(String).includes(participantId));
   await Promise.allSettled(
     recipientIds.map((recipientId) =>
       sendPushToUser(recipientId, {
@@ -5498,6 +6040,7 @@ function sanitizeUser(user) {
     themePreference: user.themePreference || "dark",
     avatarColor: user.avatarColor,
     avatarDataUrl: user.avatarDataUrl || "",
+    avatarPublicId: user.avatarPublicId || "",
     privacySettings: {
       lastSeen: "everyone",
       profilePhoto: "everyone",
@@ -5846,8 +6389,38 @@ function setCallActive(call) {
   });
 }
 
+function clearCallDisconnectTimer(userId) {
+  const id = String(userId || "");
+  const timer = callDisconnectTimers.get(id);
+  if (timer) clearTimeout(timer);
+  callDisconnectTimers.delete(id);
+}
+
+function scheduleCallDisconnect(call, userId) {
+  const id = String(userId || "");
+  if (!call?.id || !id) return;
+  clearCallDisconnectTimer(id);
+  const timer = setTimeout(async () => {
+    callDisconnectTimers.delete(id);
+    if (socketUserIds(id).length) return;
+    const current = callSessions.get(call.id);
+    if (!current || ![current.callerId, current.targetId].map(String).includes(id)) return;
+    clearCallActive(current);
+    emitToUser(callPeerId(current, id), "call:end", {
+      callId: current.id,
+      reason: "disconnect",
+      fromUserId: id,
+    });
+    await saveCallMetadata(current, "ended", 0).catch(console.warn);
+    await createCallMessage(current, "ended", 0).catch(console.warn);
+  }, CALL_DISCONNECT_GRACE_MS);
+  callDisconnectTimers.set(id, timer);
+}
+
 function clearCallActive(call) {
   if (!call) return;
+  clearCallDisconnectTimer(call.callerId);
+  clearCallDisconnectTimer(call.targetId);
   if (activeCallsByUser.get(String(call.callerId)) === call.id) activeCallsByUser.delete(String(call.callerId));
   if (activeCallsByUser.get(String(call.targetId)) === call.id) activeCallsByUser.delete(String(call.targetId));
   callSessions.delete(call.id);
@@ -5919,6 +6492,13 @@ function callIceServers() {
   }
 
   return iceServers;
+}
+
+function callTurnEnabled() {
+  return callIceServers().some((server) => {
+    const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+    return urls.some((url) => /^turns?:/i.test(String(url || "")));
+  });
 }
 
 async function saveCallMetadata(call, status, durationSeconds = 0) {
@@ -6026,6 +6606,7 @@ io.on("connection", async (socket) => {
         socketUser = await identifySocketSession(handshakeToken);
         if (socketUser.role !== "admin") ensureActiveUser(socketUser);
         socket.data.user = socketUser;
+        clearCallDisconnectTimer(socketUser.id);
       } catch (authError) {
         socketUser = null;
       }
@@ -6042,6 +6623,7 @@ io.on("connection", async (socket) => {
       const user = await identifySocketSession(token);
       if (user.role !== "admin") ensureActiveUser(user);
       socket.data.user = user;
+      clearCallDisconnectTimer(user.id);
       io.emit("presence:update", { presence: { [user.id]: presencePayload(user, true) } });
       await broadcastRooms();
     } catch (error) {
@@ -6155,6 +6737,16 @@ io.on("connection", async (socket) => {
     }
   });
 
+  socket.on("dm:delivered", async ({ token, messageId } = {}) => {
+    try {
+      const user = await requireUser(token);
+      ensureActiveUser(user);
+      await markDmMessageDelivered(messageId, user);
+    } catch (error) {
+      socket.emit("server-error", { error: error.message || "Personal message delivery update failed." });
+    }
+  });
+
   socket.on("message:delivered", async ({ token, messageId } = {}) => {
     try {
       const user = await requireUser(token);
@@ -6254,8 +6846,23 @@ io.on("connection", async (socket) => {
         throw createHttpError(403, "This user is not accepting calls right now.");
       }
 
+      let dmThreadId = cleanText(payload.dmThreadId, 80);
+      if (dmThreadId) {
+        const dmThread = await findDmThreadForUser(dmThreadId, caller);
+        const participantIds = (dmThread.participantIds || []).map(String);
+        if (!participantIds.includes(String(target.id))) dmThreadId = "";
+      }
+
       const targetSockets = socketUserIds(target.id);
       if (!targetSockets.length) {
+        sendPushToUser(target.id, {
+          title: `Missed ${callType} call`,
+          body: displayNameForUser(caller) || "AnonChat friend",
+          tag: `anonchat-call-${cleanText(payload.callId, 80) || target.id}`,
+          url: dmThreadId ? `/dm/${encodeURIComponent(dmThreadId)}` : "/chat",
+          dmThreadId,
+          type: "call-missed",
+        }).catch(console.warn);
         socket.emit("call:offline", { targetUserId: target.id });
         if (typeof ack === "function") ack({ ok: false, reason: "offline" });
         return;
@@ -6282,6 +6889,7 @@ io.on("connection", async (socket) => {
         targetId: target.id,
         target: sanitizeUser(target),
         roomId: cleanText(payload.roomId || socket.data.roomId || "", 80),
+        dmThreadId,
         status: "ringing",
         startedAt: Date.now(),
         answeredAt: null,
@@ -6292,9 +6900,19 @@ io.on("connection", async (socket) => {
         callId: call.id,
         type: call.type,
         roomId: call.roomId,
+        dmThreadId: call.dmThreadId,
         caller: call.caller,
         offer: payload.offer,
       });
+      sendPushToUser(target.id, {
+        title: `Incoming ${call.type} call`,
+        body: displayNameForUser(caller) || "AnonChat friend",
+        tag: `anonchat-call-${call.id}`,
+        url: call.dmThreadId ? `/dm/${encodeURIComponent(call.dmThreadId)}` : "/chat",
+        dmThreadId: call.dmThreadId,
+        roomId: call.roomId,
+        type: "call-incoming",
+      }).catch(console.warn);
       socket.emit("call:ringing", { callId: call.id, target: call.target, type: call.type });
       if (typeof ack === "function") ack({ ok: true, callId: call.id });
     } catch (error) {
@@ -6333,6 +6951,47 @@ io.on("connection", async (socket) => {
       });
     } catch (error) {
       socket.emit("call:error", { error: error.message || "ICE signaling failed." });
+    }
+  });
+
+  socket.on("call:restart-offer", async (payload = {}, ack) => {
+    try {
+      const user = await requireUser(payload.token);
+      ensureActiveUser(user);
+      socket.data.user = user;
+      clearCallDisconnectTimer(user.id);
+      const call = callSessions.get(String(payload.callId || ""));
+      if (!call || call.status !== "active") throw createHttpError(404, "Call is no longer active.");
+      if (![call.callerId, call.targetId].map(String).includes(String(user.id))) {
+        throw createHttpError(403, "Call recovery is not allowed.");
+      }
+      emitToUser(callPeerId(call, user.id), "call:restart-offer", {
+        callId: call.id,
+        offer: payload.offer,
+        fromUserId: user.id,
+      });
+      if (typeof ack === "function") ack({ ok: true });
+    } catch (error) {
+      if (typeof ack === "function") ack({ ok: false, error: error.message || "Call recovery failed." });
+    }
+  });
+
+  socket.on("call:restart-answer", async (payload = {}) => {
+    try {
+      const user = await requireUser(payload.token);
+      ensureActiveUser(user);
+      socket.data.user = user;
+      clearCallDisconnectTimer(user.id);
+      const call = callSessions.get(String(payload.callId || ""));
+      if (!call || call.status !== "active") return;
+      if (![call.callerId, call.targetId].map(String).includes(String(user.id))) return;
+      emitToUser(callPeerId(call, user.id), "call:restart-answer", {
+        callId: call.id,
+        answer: payload.answer,
+        fromUserId: user.id,
+      });
+    } catch (error) {
+      socket.emit("call:error", { error: error.message || "Call recovery answer failed." });
     }
   });
 
@@ -6388,6 +7047,17 @@ io.on("connection", async (socket) => {
       await saveCallMetadata(call, "missed", 0);
       await createCallMessage(call, "missed", 0);
       emitToUser(callPeerId(call, user.id), "call:missed", { callId: call.id, fromUserId: user.id });
+      if (String(user.id) === String(call.callerId)) {
+        sendPushToUser(call.targetId, {
+          title: `Missed ${call.type} call`,
+          body: call.caller?.name || call.callerName || "AnonChat friend",
+          tag: `anonchat-call-${call.id}`,
+          url: call.dmThreadId ? `/dm/${encodeURIComponent(call.dmThreadId)}` : "/chat",
+          dmThreadId: call.dmThreadId || "",
+          roomId: call.roomId || "",
+          type: "call-missed",
+        }).catch(console.warn);
+      }
     } catch (error) {
       socket.emit("call:error", { error: error.message || "Missed call update failed." });
     }
@@ -6419,14 +7089,7 @@ io.on("connection", async (socket) => {
     const callId = activeCallsByUser.get(String(userId || ""));
     const call = callId ? callSessions.get(callId) : null;
     if (call) {
-      clearCallActive(call);
-      emitToUser(callPeerId(call, userId), "call:end", {
-        callId: call.id,
-        reason: "disconnect",
-        fromUserId: userId,
-      });
-      saveCallMetadata(call, "ended", 0).catch(console.warn);
-      createCallMessage(call, "ended", 0).catch(console.warn);
+      scheduleCallDisconnect(call, userId);
     }
     socket.data.roomId = "";
   });

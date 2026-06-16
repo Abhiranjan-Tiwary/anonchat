@@ -21,9 +21,12 @@ const NOTIFICATION_READ_KEY = "anonchat-notifications-read-v1";
 const USER_SETTINGS_KEY = "anonchat-user-settings-v1";
 const THEME_KEY = "anonchat-theme-v1";
 const INSTALL_PROMPT_DISMISSED_KEY = "anonchat-install-dismissed-at-v1";
+const PENDING_NOTIFICATION_TARGET_KEY = "anonchat-pending-notification-target-v1";
 const INSTALL_PROMPT_DISMISS_MS = 24 * 60 * 60 * 1000;
 const CONNECTION_TOAST_COOLDOWN_MS = 8000;
 const API_TIMEOUT_MS = 25000;
+const MESSAGE_OUTBOX_PREFIX = "anonchat-message-outbox-v1";
+const MESSAGE_OUTBOX_MAX_ITEMS = 50;
 const PINNED_ROOMS_KEY = "anonchat-pinned-rooms-v1";
 const PINNED_MESSAGES_KEY = "anonchat-pinned-messages-v1";
 const STARRED_MESSAGES_KEY = "anonchat-starred-messages-v1";
@@ -34,6 +37,7 @@ const ADMIN_ROUTES = Object.freeze({
   reports: "/admin/reports",
   blockedUsers: "/admin/blocked-users",
   messagesMonitoring: "/admin/messages-monitoring",
+  auditLog: "/admin/audit-log",
   announcements: "/admin/announcements",
   settings: "/admin/settings",
 });
@@ -45,6 +49,7 @@ const ADMIN_ROUTE_ITEMS = Object.freeze([
   { label: "Reports", route: ADMIN_ROUTES.reports, icon: "RP" },
   { label: "Blocked Users", route: ADMIN_ROUTES.blockedUsers, icon: "BU" },
   { label: "Messages Monitoring", route: ADMIN_ROUTES.messagesMonitoring, icon: "MM" },
+  { label: "Audit Log", route: ADMIN_ROUTES.auditLog, icon: "AL" },
   { label: "Announcements", route: ADMIN_ROUTES.announcements, icon: "AN" },
   { label: "Settings", route: ADMIN_ROUTES.settings, icon: "ST" },
 ]);
@@ -56,6 +61,7 @@ const ADMIN_PAGE_META = Object.freeze({
   [ADMIN_ROUTES.reports]: ["Reports", "Track moderation reports with status, priority, and actions."],
   [ADMIN_ROUTES.blockedUsers]: ["Blocked Users", "See suspended accounts and reactivate users when needed."],
   [ADMIN_ROUTES.messagesMonitoring]: ["Messages Monitoring", "Monitor recent conversations for safety signals."],
+  [ADMIN_ROUTES.auditLog]: ["Audit Log", "Review moderator actions, targets, notes, and timestamps."],
   [ADMIN_ROUTES.announcements]: ["Announcements", "Draft platform notices and review recent broadcasts."],
   [ADMIN_ROUTES.settings]: ["Settings", "Manage admin profile, platform defaults, and moderation controls."],
 });
@@ -121,6 +127,8 @@ const PASSWORD_RULE_TEXT =
   "Password must be 8-64 characters and include uppercase, lowercase, number, and symbol (! @ # $ % ^ & * _ - + = . ?).";
 const CALL_TIMEOUT_MS = 45000;
 const CALL_CONNECT_TIMEOUT_MS = 25000;
+const CALL_ICE_RESTART_MAX_ATTEMPTS = 3;
+const CALL_QUALITY_INTERVAL_MS = 4000;
 const RTC_CONFIGURATION = Object.freeze({
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -175,6 +183,7 @@ let state = {
   adminUserSearchQuery: "",
   adminMessageSearchQuery: "",
   adminAnnouncementEditingId: null,
+  adminSelectedReportIds: new Set(),
   replyToMessageId: null,
   editingMessageId: null,
   deleteMessageId: null,
@@ -208,9 +217,12 @@ let state = {
   dmThreads: [],
   dmThreadsLoaded: false,
   dmThreadsLoading: false,
+  activeDmMenuId: "",
+  showArchivedDms: false,
   dmMessagesByThread: {},
   dmMessagesLoading: false,
   dmMessagesLoadedAt: {},
+  dmMessagePaginationByThread: {},
   unlockedRoomIds: new Set(),
   userSettings: defaultUserSettings(),
   admin: {
@@ -222,6 +234,7 @@ let state = {
     messages: [],
     announcements: [],
     settings: {},
+    pagination: {},
   },
   stats: {
     online: 0,
@@ -240,6 +253,7 @@ let typingTimer = null;
 let typingRequestTimer = null;
 let roomMessageFetchToken = 0;
 const roomMessagesLoadedAt = new Map();
+const roomMessagePagination = new Map();
 let adminSearchDebounce = null;
 let selectedMonitorUserId = null;
 let selectedMonitorUserName = "";
@@ -250,6 +264,8 @@ let monitorUsersCache = [];
 let selectedProfileAuthorId = null;
 let selectedProfileMessageId = null;
 let pendingAvatarDataUrl = "";
+let pendingAvatarPublicId = "";
+let profileDraftDirty = false;
 let cropState = null;
 let mediaRecorder = null;
 let voiceChunks = [];
@@ -298,6 +314,8 @@ let attachmentPickerMode = "";
 let socketHasConnectedOnce = false;
 let connectionStatus = "offline";
 let lastConnectionToastAt = 0;
+let outboxFlushPromise = null;
+const outboxSendingIds = new Set();
 let notificationAudioContext = null;
 let ringtoneTimer = null;
 const originalDocumentTitle = document.title;
@@ -337,6 +355,11 @@ let callState = {
   durationTimer: null,
   timeoutTimer: null,
   connectionTimer: null,
+  iceRestartTimer: null,
+  qualityTimer: null,
+  iceRestartAttempts: 0,
+  iceRestartInProgress: false,
+  quality: "",
   muted: false,
   speakerMuted: false,
   cameraOff: false,
@@ -367,19 +390,73 @@ document.addEventListener("DOMContentLoaded", async () => {
   } catch (error) {
     console.error("Some click handlers could not be bound:", error);
   }
+  initMobileViewport();
+  captureInitialNotificationTarget();
   initPwaExperience();
   syncAuthModeFromRoute();
   renderAuthShell();
 
   try {
     await refreshState();
+    restoreOutboxMessages();
     applyThemeChoice(loadUserSettings().theme, { persist: false, transition: false });
     if (state.session) connectLiveUpdates();
     render();
+    flushMessageOutbox().catch(debugSocketWarning);
+    consumePendingNotificationTarget().catch(debugSocketWarning);
   } catch (error) {
     showOfflineError(error);
   }
+
+  window.addEventListener("online", () => {
+    setConnectionStatus(socket?.connected ? "online" : "reconnecting");
+    if (state.session && (!socket || !socket.connected)) connectLiveUpdates();
+    flushMessageOutbox({ notify: true }).catch(debugSocketWarning);
+    syncWebPushSubscription().catch(debugSocketWarning);
+  });
+  window.addEventListener("offline", () => {
+    setConnectionStatus("offline", { toastMessage: "You are offline. Messages will send when you reconnect." });
+  });
 });
+
+function initMobileViewport() {
+  const viewport = window.visualViewport;
+  const update = () => {
+    const height = Math.max(320, Number(viewport?.height || window.innerHeight || 0));
+    const offsetTop = Math.max(0, Number(viewport?.offsetTop || 0));
+    const keyboardInset = Math.max(0, Number(window.innerHeight || height) - height - offsetTop);
+    document.documentElement.style.setProperty("--app-viewport-height", `${Math.round(height)}px`);
+    document.documentElement.style.setProperty("--keyboard-inset", `${Math.round(keyboardInset)}px`);
+    document.body.classList.toggle("mobile-keyboard-open", keyboardInset > 110);
+  };
+
+  update();
+  window.addEventListener("resize", update, { passive: true });
+  window.addEventListener("orientationchange", () => window.setTimeout(update, 120), { passive: true });
+  viewport?.addEventListener("resize", update, { passive: true });
+  viewport?.addEventListener("scroll", update, { passive: true });
+
+  document.addEventListener("focusin", (event) => {
+    const field = event.target.closest?.("input, textarea, select");
+    if (!field) return;
+    document.body.classList.add("mobile-field-focused");
+    window.setTimeout(() => {
+      update();
+      if (field === elements.messageInput) {
+        scrollChatToBottom({ behavior: "auto" });
+      } else if (field.closest("#authView")) {
+        field.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+      }
+    }, 180);
+  });
+
+  document.addEventListener("focusout", () => {
+    window.setTimeout(() => {
+      document.body.classList.remove("mobile-field-focused");
+      update();
+    }, 180);
+  });
+}
 
 function cacheElements() {
   elements.authView = document.querySelector("#authView");
@@ -584,6 +661,7 @@ function cacheElements() {
   elements.callPeerName = document.querySelector("#callPeerName");
   elements.callStatusText = document.querySelector("#callStatusText");
   elements.callDuration = document.querySelector("#callDuration");
+  elements.callQuality = document.querySelector("#callQuality");
   elements.callMoreButton = document.querySelector("#callMoreButton");
   elements.callMoreMenu = document.querySelector("#callMoreMenu");
   elements.callReactionOverlay = document.querySelector("#callReactionOverlay");
@@ -817,6 +895,13 @@ window.addEventListener("beforeunload", () => {
 
   elements.sidebarDmList?.addEventListener("click", (event) => {
     if (elements.sidebarDmList.hidden) return;
+    const dmAction = event.target.closest("[data-dm-action]");
+    if (dmAction) {
+      event.preventDefault();
+      event.stopPropagation();
+      handleDmThreadAction(dmAction).catch(handleApiError);
+      return;
+    }
     const dmThreadButton = event.target.closest("[data-dm-thread-id]");
     if (dmThreadButton) {
       openDmThread(dmThreadButton.dataset.dmThreadId);
@@ -836,6 +921,19 @@ window.addEventListener("beforeunload", () => {
   elements.homeView?.addEventListener("change", handleProfilePanelChange);
 
   elements.chatFeed.addEventListener("click", async (event) => {
+    const retryButton = event.target.closest("[data-message-retry]");
+    if (retryButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      retryButton.disabled = true;
+      try {
+        await retryOutboxMessage(retryButton.dataset.messageRetry);
+      } finally {
+        retryButton.disabled = false;
+      }
+      return;
+    }
+
     const mediaTrigger = event.target.closest("[data-media-viewer]");
     if (mediaTrigger && !event.target.closest("[data-media-action]")) {
       event.preventDefault();
@@ -1023,6 +1121,7 @@ window.addEventListener("beforeunload", () => {
   document.addEventListener("wheel", handleChatContextWheel, { capture: true, passive: true });
   window.addEventListener("resize", hideChatContextMenu);
   document.addEventListener("click", handleComposerOutsideClick);
+  document.addEventListener("click", closeDmMenusFromOutside);
 }
 
 function normalizeRoute(pathname = window.location.pathname) {
@@ -1130,7 +1229,7 @@ function resolveRouteForSession(loggedIn) {
   const guest = loggedIn && isGuestSession();
 
   if (isAdminRoute(route) && !loggedIn) {
-    route = LOGIN_ROUTE;
+    route = ADMIN_LOGIN_ROUTE;
     window.history.replaceState({}, "", route);
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   } else if (guest && isAdminRoute(route)) {
@@ -1533,6 +1632,7 @@ function refreshAuthenticatedStateAfterAuth() {
   refreshState()
     .then(() => (isAdmin() ? refreshAdminState() : null))
     .then(() => syncWebPushSubscription())
+    .then(() => consumePendingNotificationTarget())
     .then(() => render())
     .catch(() => {
       toast("Logged in, but latest data is still refreshing.");
@@ -2196,8 +2296,7 @@ async function handleMessageSubmit(event) {
   lastMessageSubmitKey = submitKey;
   window.clearTimeout(messageSubmitCooldownTimer);
 
-  let clientTempId = "";
-  let replyToMessageId = state.replyToMessageId;
+  const replyToMessageId = state.replyToMessageId;
 
   try {
     if (state.editingMessageId) {
@@ -2206,9 +2305,19 @@ async function handleMessageSubmit(event) {
       return;
     }
 
-    clientTempId = createClientTempId();
+    const clientTempId = createClientTempId();
     const pendingMessage = createOptimisticMessage({ text, attachment, replyToMessageId, clientTempId });
     upsertMessage(pendingMessage);
+    const outboxItem = createOutboxItem({
+      kind: "room",
+      clientTempId,
+      roomId: state.activeRoomId,
+      text,
+      replyToMessageId,
+      attachment,
+      optimisticMessage: pendingMessage,
+    });
+    enqueueOutboxItem(outboxItem);
 
     elements.messageInput.value = "";
     state.replyToMessageId = null;
@@ -2218,45 +2327,9 @@ async function handleMessageSubmit(event) {
     scheduleRoomSummaryRender();
     sendTyping(false);
 
-    const result = await api("/api/messages", {
-      method: "POST",
-      body: {
-        token: state.session.token,
-        roomId: state.activeRoomId,
-        text,
-        replyToMessageId,
-        attachment,
-        clientTempId,
-      },
-    });
-
-    if (result.message) {
-      upsertMessage({ ...result.message, clientTempId: result.message.clientTempId || clientTempId });
-      renderMessages({ preserveScroll: true });
-      scheduleRoomSummaryRender();
-    }
+    await sendOutboxItem(outboxItem, { notify: true });
   } catch (error) {
     console.error("Send failed:", error);
-    if (canFallbackToSocketMessageSend(error)) {
-      socket.emit("message:send", {
-        token: state.session.token,
-        roomId: state.activeRoomId,
-        text,
-        replyToMessageId: replyToMessageId || null,
-        attachment,
-      });
-      return;
-    }
-
-    const failed = state.messages.find((message) =>
-      message.localStatus === "pending" &&
-      (message.clientTempId === clientTempId || message.submitKey === submitKey)
-    );
-    if (failed) {
-      failed.localStatus = "failed";
-      failed.delivery = { ...failed.delivery, failedAt: Date.now() };
-      renderMessages({ preserveScroll: true });
-    }
     if (isSessionExpiredError(error)) {
       handleApiError(error);
     } else {
@@ -2268,12 +2341,6 @@ async function handleMessageSubmit(event) {
       if (lastMessageSubmitKey === submitKey) lastMessageSubmitKey = "";
     }, 800);
   }
-}
-
-function canFallbackToSocketMessageSend(error) {
-  if (!socket?.connected || !state.session?.token || !state.activeRoomId) return false;
-  const status = Number(error?.status);
-  return status === 404 || status === 405;
 }
 
 function messageSubmitKey(text, attachment, replyToMessageId) {
@@ -2296,6 +2363,307 @@ function createClientTempId() {
     ? Array.from(window.crypto.getRandomValues(new Uint32Array(2)), (value) => value.toString(36)).join("")
     : Math.random().toString(36).slice(2, 14);
   return `ct_${Date.now().toString(36)}_${random}`;
+}
+
+function messageOutboxStorageKey(userId = state.session?.user?.id) {
+  const id = String(userId || "").trim();
+  return id ? `${MESSAGE_OUTBOX_PREFIX}:${id}` : "";
+}
+
+function readMessageOutbox() {
+  const key = messageOutboxStorageKey();
+  if (!key) return [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => item?.clientTempId && item?.kind && item?.userId === String(state.session?.user?.id || ""))
+      : [];
+  } catch (error) {
+    localStorage.removeItem(key);
+    return [];
+  }
+}
+
+function writeMessageOutbox(items) {
+  const key = messageOutboxStorageKey();
+  if (!key) return false;
+  try {
+    localStorage.setItem(key, JSON.stringify(items.slice(-MESSAGE_OUTBOX_MAX_ITEMS)));
+    return true;
+  } catch (error) {
+    console.warn("Message outbox could not be saved:", error);
+    return false;
+  }
+}
+
+function createOutboxItem({
+  kind,
+  clientTempId,
+  roomId = "",
+  threadId = "",
+  text = "",
+  replyToMessageId = null,
+  attachment = null,
+  optimisticMessage = null,
+}) {
+  return {
+    kind,
+    clientTempId: String(clientTempId || createClientTempId()),
+    userId: String(state.session?.user?.id || ""),
+    roomId: String(roomId || ""),
+    threadId: String(threadId || ""),
+    text,
+    replyToMessageId: replyToMessageId || null,
+    attachment,
+    optimisticMessage,
+    status: navigator.onLine === false ? "queued" : "pending",
+    attempts: 0,
+    createdAt: Number(optimisticMessage?.createdAt || Date.now()),
+    updatedAt: Date.now(),
+    lastError: "",
+  };
+}
+
+function enqueueOutboxItem(item) {
+  const items = readMessageOutbox().filter((entry) => entry.clientTempId !== item.clientTempId);
+  writeMessageOutbox([...items, item]);
+  setOutboxMessageStatus(item, item.status);
+}
+
+function updateOutboxItem(clientTempId, changes = {}) {
+  const items = readMessageOutbox();
+  const index = items.findIndex((item) => item.clientTempId === String(clientTempId || ""));
+  if (index < 0) return null;
+  items[index] = {
+    ...items[index],
+    ...changes,
+    updatedAt: Date.now(),
+  };
+  writeMessageOutbox(items);
+  return items[index];
+}
+
+function removeOutboxItem(clientTempId) {
+  const id = String(clientTempId || "");
+  writeMessageOutbox(readMessageOutbox().filter((item) => item.clientTempId !== id));
+}
+
+function clearCurrentUserOutbox() {
+  const key = messageOutboxStorageKey();
+  if (key) localStorage.removeItem(key);
+}
+
+function setOutboxMessageStatus(item, status, error = null) {
+  if (!item?.clientTempId) return;
+  const statusTime = Date.now();
+  const deliveryPatch = status === "queued"
+    ? { queuedAt: statusTime, failedAt: null }
+    : status === "failed"
+      ? { failedAt: statusTime }
+      : { failedAt: null };
+
+  if (item.kind === "dm") {
+    const threadId = String(item.threadId || "");
+    state.dmMessagesByThread = {
+      ...state.dmMessagesByThread,
+      [threadId]: dmMessagesForThread(threadId).map((message) => (
+        String(message.clientTempId || "") === String(item.clientTempId)
+          ? {
+              ...message,
+              localStatus: status,
+              delivery: { ...normalizeDelivery(message.delivery), ...deliveryPatch },
+            }
+          : message
+      )),
+    };
+    if (isDmRoute() && activeDmThreadId() === threadId) renderDmMessages({ preserveScroll: true });
+    return;
+  }
+
+  state.messages = state.messages.map((message) => (
+    String(message.clientTempId || "") === String(item.clientTempId)
+      ? {
+          ...message,
+          localStatus: status,
+          delivery: { ...normalizeDelivery(message.delivery), ...deliveryPatch },
+        }
+      : message
+  ));
+  if (!isDmRoute() && String(state.activeRoomId || "") === String(item.roomId || "")) {
+    renderMessages({ preserveScroll: true });
+  }
+}
+
+function isRetryableMessageError(error) {
+  if (navigator.onLine === false) return true;
+  const status = Number(error?.status || 0);
+  if ([408, 425, 429].includes(status) || status >= 500) return true;
+  const message = String(error?.message || "").toLowerCase();
+  return !status && (
+    message.includes("failed to fetch") ||
+    message.includes("network") ||
+    message.includes("timed out") ||
+    message.includes("load failed")
+  );
+}
+
+async function sendOutboxItem(item, options = {}) {
+  if (!item?.clientTempId || !state.session?.token) return false;
+  if (String(item.userId || "") !== String(state.session?.user?.id || "")) return false;
+  if (outboxSendingIds.has(item.clientTempId)) return false;
+
+  if (navigator.onLine === false) {
+    const queued = updateOutboxItem(item.clientTempId, { status: "queued" }) || item;
+    setOutboxMessageStatus(queued, "queued");
+    if (options.notify) toast("Message queued. It will send when you are back online.");
+    return false;
+  }
+
+  outboxSendingIds.add(item.clientTempId);
+  const sending = updateOutboxItem(item.clientTempId, {
+    status: "pending",
+    attempts: Number(item.attempts || 0) + 1,
+    lastError: "",
+  }) || { ...item, status: "pending" };
+  setOutboxMessageStatus(sending, "pending");
+
+  try {
+    const path = sending.kind === "dm"
+      ? `/api/dms/threads/${encodeURIComponent(sending.threadId)}/messages`
+      : "/api/messages";
+    const body = sending.kind === "dm"
+      ? {
+          token: state.session.token,
+          text: sending.text,
+          replyToMessageId: sending.replyToMessageId,
+          attachment: sending.attachment,
+          clientTempId: sending.clientTempId,
+        }
+      : {
+          token: state.session.token,
+          roomId: sending.roomId,
+          text: sending.text,
+          replyToMessageId: sending.replyToMessageId,
+          attachment: sending.attachment,
+          clientTempId: sending.clientTempId,
+        };
+    const result = await api(path, { method: "POST", body });
+
+    removeOutboxItem(sending.clientTempId);
+    if (sending.kind === "dm") {
+      if (result.thread) upsertDmThread(result.thread);
+      if (result.message) {
+        upsertDmMessage(sending.threadId, {
+          ...result.message,
+          clientTempId: result.message.clientTempId || sending.clientTempId,
+        });
+      }
+      if (isDmRoute() && activeDmThreadId() === String(sending.threadId)) {
+        renderDmMessages({ preserveScroll: true });
+        renderDmThreadSummary();
+      }
+      renderSidebarDirectMessages();
+      renderMobileAppMenuDms();
+    } else if (result.message) {
+      upsertMessage({
+        ...result.message,
+        clientTempId: result.message.clientTempId || sending.clientTempId,
+      });
+      if (!isDmRoute() && String(state.activeRoomId) === String(sending.roomId)) {
+        renderMessages({ preserveScroll: true });
+      }
+      scheduleRoomSummaryRender();
+    }
+    return true;
+  } catch (error) {
+    if (isSessionExpiredError(error)) {
+      removeOutboxItem(sending.clientTempId);
+      handleApiError(error);
+      return false;
+    }
+
+    const retryable = isRetryableMessageError(error);
+    const status = retryable ? "queued" : "failed";
+    const updated = updateOutboxItem(sending.clientTempId, {
+      status,
+      lastError: String(error?.message || "Message failed to send."),
+    }) || { ...sending, status };
+    setOutboxMessageStatus(updated, status, error);
+
+    if (options.notify) {
+      toast(retryable
+        ? "Message queued. It will send when the connection returns."
+        : "Message failed to send. Tap Retry.");
+    }
+    return false;
+  } finally {
+    outboxSendingIds.delete(item.clientTempId);
+  }
+}
+
+function restoreOutboxMessages() {
+  readMessageOutbox().forEach((item) => {
+    const localStatus = item.status === "failed" ? "failed" : "queued";
+    const optimisticMessage = {
+      ...(item.optimisticMessage || {}),
+      clientTempId: item.clientTempId,
+      createdAt: item.createdAt,
+      localStatus,
+      delivery: {
+        ...normalizeDelivery(item.optimisticMessage?.delivery),
+        queuedAt: localStatus === "queued" ? item.updatedAt || item.createdAt : null,
+        failedAt: localStatus === "failed" ? item.updatedAt || item.createdAt : null,
+      },
+    };
+    if (item.kind === "dm") {
+      upsertDmMessage(item.threadId, {
+        ...optimisticMessage,
+        threadId: item.threadId,
+      });
+    } else {
+      upsertMessage({
+        ...optimisticMessage,
+        roomId: item.roomId,
+      });
+    }
+  });
+}
+
+function flushMessageOutbox(options = {}) {
+  if (outboxFlushPromise) return outboxFlushPromise;
+  if (!state.session?.token || isGuestSession() || isAdmin() || navigator.onLine === false) {
+    return Promise.resolve(false);
+  }
+
+  outboxFlushPromise = (async () => {
+    const queuedItems = readMessageOutbox()
+      .filter((item) => item.status !== "failed")
+      .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
+    let sentAny = false;
+    for (const item of queuedItems) {
+      const sent = await sendOutboxItem(item);
+      sentAny = sentAny || sent;
+      if (!sent) {
+        const latest = readMessageOutbox().find((entry) => entry.clientTempId === item.clientTempId);
+        if (navigator.onLine === false || latest?.status === "queued") break;
+      }
+    }
+    if (sentAny && options.notify) toast("Queued messages sent.");
+    return sentAny;
+  })().finally(() => {
+    outboxFlushPromise = null;
+  });
+
+  return outboxFlushPromise;
+}
+
+async function retryOutboxMessage(clientTempId) {
+  const item = readMessageOutbox().find((entry) => entry.clientTempId === String(clientTempId || ""));
+  if (!item) {
+    toast("This message is no longer waiting to send.");
+    return false;
+  }
+  return sendOutboxItem(item, { notify: true });
 }
 
 function createOptimisticMessage({ text, attachment, replyToMessageId, clientTempId }) {
@@ -2952,6 +3320,11 @@ function defaultCallState() {
     durationTimer: null,
     timeoutTimer: null,
     connectionTimer: null,
+    iceRestartTimer: null,
+    qualityTimer: null,
+    iceRestartAttempts: 0,
+    iceRestartInProgress: false,
+    quality: "",
     muted: false,
     speakerMuted: false,
     cameraOff: false,
@@ -3091,6 +3464,7 @@ async function startOutgoingCall(peer, type = "audio") {
       type: callState.type,
       targetUserId: peer.id,
       roomId: callState.roomId,
+      dmThreadId: isDmRoute() ? activeDmThreadId() : "",
       offer: pc.localDescription,
     });
 
@@ -3148,6 +3522,7 @@ async function loadRtcConfiguration() {
       resolvedRtcConfiguration = {
         iceServers: iceServers.length ? iceServers : RTC_CONFIGURATION.iceServers,
         iceCandidatePoolSize: Math.max(0, Math.min(Number(config.iceCandidatePoolSize || 10), 20)),
+        iceTransportPolicy: config.iceTransportPolicy === "relay" ? "relay" : "all",
         bundlePolicy: "max-bundle",
         rtcpMuxPolicy: "require",
       };
@@ -3317,15 +3692,33 @@ function setupPeerConnection() {
     if (["disconnected", "connecting"].includes(pc.connectionState) && callState.status === "active") {
       callState.status = "reconnecting";
       startCallConnectionTimeout();
+      scheduleCallIceRestart();
       updateCallUi();
       playRemoteCallMedia();
       return;
     }
-    if (pc.connectionState === "connected" && activateConnectedCall()) return;
-    if (["failed", "closed"].includes(pc.connectionState) && callState.active) {
+    if (pc.connectionState === "connected" && activateConnectedCall()) {
+      callState.iceRestartAttempts = 0;
+      callState.iceRestartInProgress = false;
+      window.clearTimeout(callState.iceRestartTimer);
+      callState.iceRestartTimer = null;
+      return;
+    }
+    if (pc.connectionState === "failed" && callState.active && callState.iceRestartAttempts < CALL_ICE_RESTART_MAX_ATTEMPTS) {
+      callState.status = "reconnecting";
+      requestCallIceRestart("connection-failed");
+      updateCallUi();
+      return;
+    }
+    if (pc.connectionState === "closed" && callState.active) {
       toast("Call connection ended.");
       endCurrentCall("ended", true);
     }
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    if (!callState.active) return;
+    if (["disconnected", "failed"].includes(pc.iceConnectionState)) scheduleCallIceRestart();
   };
 
   return pc;
@@ -3340,9 +3733,145 @@ function activateConnectedCall() {
     callState.startedAt = Date.now();
     startCallDurationTimer();
   }
+  startCallQualityMonitor();
   updateCallUi();
   playRemoteCallMedia();
   return true;
+}
+
+function scheduleCallIceRestart(delay = 1200) {
+  if (!callState.active || callState.direction !== "outgoing" || callState.iceRestartInProgress) return;
+  if (callState.iceRestartAttempts >= CALL_ICE_RESTART_MAX_ATTEMPTS) return;
+  window.clearTimeout(callState.iceRestartTimer);
+  callState.iceRestartTimer = window.setTimeout(() => requestCallIceRestart("network-change"), delay);
+}
+
+async function requestCallIceRestart(reason = "network-change") {
+  const pc = callState.pc;
+  if (
+    !callState.active ||
+    callState.direction !== "outgoing" ||
+    !pc ||
+    pc.signalingState === "closed" ||
+    callState.iceRestartInProgress ||
+    callState.iceRestartAttempts >= CALL_ICE_RESTART_MAX_ATTEMPTS
+  ) return;
+
+  if (!socket?.connected) {
+    scheduleCallIceRestart(1800);
+    return;
+  }
+
+  callState.iceRestartInProgress = true;
+  callState.iceRestartAttempts += 1;
+  callState.status = "reconnecting";
+  updateCallUi();
+
+  try {
+    pc.restartIce?.();
+    const offer = await pc.createOffer({ iceRestart: true });
+    await pc.setLocalDescription(offer);
+    const response = await emitCallEvent("call:restart-offer", {
+      token: state.session?.token,
+      callId: callState.callId,
+      offer: pc.localDescription,
+      reason,
+    });
+    if (!response?.ok) throw new Error(response?.error || response?.reason || "ICE restart was not accepted.");
+    flushPendingLocalCandidates();
+    startCallConnectionTimeout();
+  } catch (error) {
+    debugSocketWarning("Call ICE restart failed:", error.message);
+    callState.iceRestartInProgress = false;
+    if (callState.iceRestartAttempts < CALL_ICE_RESTART_MAX_ATTEMPTS) {
+      scheduleCallIceRestart(1200 * callState.iceRestartAttempts);
+    }
+  }
+}
+
+async function handleCallRestartOffer(payload = {}) {
+  if (!callState.active || payload.callId !== callState.callId || !callState.pc || !payload.offer) return;
+  try {
+    callState.status = "reconnecting";
+    updateCallUi();
+    await callState.pc.setRemoteDescription(new RTCSessionDescription(payload.offer));
+    await drainPendingRemoteCandidates();
+    const answer = await callState.pc.createAnswer();
+    await callState.pc.setLocalDescription(answer);
+    socket?.emit("call:restart-answer", {
+      token: state.session?.token,
+      callId: callState.callId,
+      answer: callState.pc.localDescription,
+    });
+    flushPendingLocalCandidates();
+    startCallConnectionTimeout();
+  } catch (error) {
+    debugSocketWarning("Could not apply call recovery offer:", error.message);
+  }
+}
+
+async function handleCallRestartAnswer(payload = {}) {
+  if (!callState.active || payload.callId !== callState.callId || !callState.pc || !payload.answer) return;
+  try {
+    await callState.pc.setRemoteDescription(new RTCSessionDescription(payload.answer));
+    await drainPendingRemoteCandidates();
+    callState.iceRestartInProgress = false;
+    if (!activateConnectedCall()) startCallConnectionTimeout();
+  } catch (error) {
+    debugSocketWarning("Could not apply call recovery answer:", error.message);
+    callState.iceRestartInProgress = false;
+    scheduleCallIceRestart(1600);
+  }
+}
+
+function startCallQualityMonitor() {
+  if (!callState.pc || callState.qualityTimer) return;
+  updateCallQuality();
+  callState.qualityTimer = window.setInterval(updateCallQuality, CALL_QUALITY_INTERVAL_MS);
+}
+
+async function updateCallQuality() {
+  const pc = callState.pc;
+  if (!callState.active || !pc || pc.connectionState !== "connected") {
+    callState.quality = callState.status === "reconnecting" ? "Reconnecting" : "";
+    updateCallQualityUi();
+    return;
+  }
+
+  try {
+    const stats = await pc.getStats();
+    let received = 0;
+    let lost = 0;
+    let jitter = 0;
+    let roundTripTime = 0;
+    stats.forEach((report) => {
+      if (report.type === "inbound-rtp" && !report.isRemote) {
+        received += Number(report.packetsReceived || 0);
+        lost += Math.max(0, Number(report.packetsLost || 0));
+        jitter = Math.max(jitter, Number(report.jitter || 0));
+      }
+      if (report.type === "candidate-pair" && report.state === "succeeded" && (report.nominated || report.selected)) {
+        roundTripTime = Math.max(roundTripTime, Number(report.currentRoundTripTime || 0));
+      }
+    });
+    const lossPercent = received + lost > 0 ? (lost / (received + lost)) * 100 : 0;
+    callState.quality = lossPercent > 8 || jitter > 0.08 || roundTripTime > 0.8
+      ? "Poor"
+      : lossPercent > 3 || jitter > 0.04 || roundTripTime > 0.4
+        ? "Fair"
+        : "Good";
+    updateCallQualityUi();
+  } catch {
+    callState.quality = "";
+    updateCallQualityUi();
+  }
+}
+
+function updateCallQualityUi() {
+  if (!elements.callQuality) return;
+  elements.callQuality.textContent = callState.quality;
+  elements.callQuality.hidden = !callState.quality;
+  elements.callQuality.dataset.quality = String(callState.quality || "").toLowerCase();
 }
 
 function emitLocalIceCandidate(candidate) {
@@ -3590,15 +4119,20 @@ function cleanupCall() {
   window.clearInterval(callState.durationTimer);
   window.clearTimeout(callState.timeoutTimer);
   window.clearTimeout(callState.connectionTimer);
+  window.clearTimeout(callState.iceRestartTimer);
+  window.clearInterval(callState.qualityTimer);
   callState.durationTimer = null;
   callState.timeoutTimer = null;
   callState.connectionTimer = null;
+  callState.iceRestartTimer = null;
+  callState.qualityTimer = null;
   try {
     if (callState.pc) {
       callState.pc.ontrack = null;
       callState.pc.onicecandidate = null;
       callState.pc.onicecandidateerror = null;
       callState.pc.onconnectionstatechange = null;
+      callState.pc.oniceconnectionstatechange = null;
       callState.pc.close();
     }
   } catch (error) {
@@ -3675,6 +4209,7 @@ function updateCallUi() {
     elements.callDuration.textContent = hasDuration ? formatCallClock(callElapsedSeconds()) : "00:00";
     elements.callDuration.hidden = !hasDuration;
   }
+  updateCallQualityUi();
 
   updateCallControlState(elements.muteCallButton, {
     active: callState.muted,
@@ -4219,6 +4754,7 @@ async function deleteMessage(messageId, scope = "everyone") {
 
 async function logout() {
   const token = state.session?.token;
+  clearCurrentUserOutbox();
   const pushCleanup = token ? removeWebPushSubscription(token) : Promise.resolve();
   state.session = null;
   state.authMode = "login";
@@ -4286,16 +4822,10 @@ async function refreshState() {
 async function refreshAdminState() {
   if (!isAdmin()) return;
 
-  const [data, messagesData] = await Promise.all([
-    api("/api/admin/state", {
-      method: "POST",
-      body: { token: state.session.token },
-    }),
-    api("/api/admin/messages", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${state.session.token}` },
-    }).catch(() => ({ messages: [] })),
-  ]);
+  const data = await api("/api/admin/state", {
+    method: "POST",
+    body: { token: state.session.token },
+  });
 
   state.admin = {
     users: (data.users || []).map((user) => ({
@@ -4312,9 +4842,10 @@ async function refreshAdminState() {
     })),
     auditLogs: data.auditLogs || [],
     rooms: (data.rooms || []).map(normalizeRoom),
-    messages: dedupeNormalizedMessages(messagesData.messages || data.messages || []),
+    messages: dedupeNormalizedMessages(data.messages || []),
     announcements: (data.announcements || []).map(normalizeAnnouncement),
     settings: data.settings || {},
+    pagination: data.pagination || {},
   };
 
   if (data.stats) state.stats = { ...state.stats, ...data.stats };
@@ -4637,6 +5168,8 @@ function normalizeDelivery(delivery = {}) {
     sentAt: delivery.sentAt || null,
     deliveredTo: arrayFrom(delivery.deliveredTo),
     seenBy: arrayFrom(delivery.seenBy),
+    queuedAt: delivery.queuedAt || null,
+    failedAt: delivery.failedAt || null,
   };
 }
 
@@ -4732,6 +5265,7 @@ function connectLiveUpdates() {
 
   socket.io?.on("reconnect", () => {
     setConnectionStatus("online", { toastMessage: "Back online.", forceToast: true });
+    flushMessageOutbox({ notify: true }).catch(debugSocketWarning);
   });
 
   socket.io?.on("reconnect_error", (error) => {
@@ -4742,6 +5276,7 @@ function connectLiveUpdates() {
   socket.on("state", (data) => {
     const stableChatRoom = Boolean(state.session && state.route === CHAT_ROUTE && !isAdmin());
     applyState(data, { mergeMessages: true, preserveActiveRoom: stableChatRoom });
+    restoreOutboxMessages();
     if (isAdmin()) {
       refreshAdminState().then(render).catch(console.warn);
     } else if (stableChatRoom) {
@@ -4893,6 +5428,7 @@ function connectLiveUpdates() {
   socket.on("friend:request:cancelled", (payload = {}) => handleFriendRealtimeEvent(payload, "friend-cancelled"));
   socket.on("dm:thread:update", (payload = {}) => handleDmThreadRealtime(payload));
   socket.on("dm:message:new", (payload = {}) => handleDmMessageRealtime(payload));
+  socket.on("dm:delivery", (payload = {}) => handleDmDeliveryRealtime(payload));
   socket.on("dm:seen", (payload = {}) => handleDmSeenRealtime(payload));
 
   socket.on("connect_error", (error) => {
@@ -4917,6 +5453,11 @@ function connectLiveUpdates() {
     joiningDmThreadId = null;
     joinActiveRoom();
     joinActiveDmThread();
+    flushMessageOutbox({ notify: hadConnectedBefore }).catch(debugSocketWarning);
+    if (callState.active && callState.direction === "outgoing" && ["active", "reconnecting"].includes(callState.status)) {
+      callState.status = "reconnecting";
+      requestCallIceRestart("signaling-reconnected");
+    }
   });
 
   socket.on("disconnect", (reason) => {
@@ -4946,6 +5487,8 @@ function connectLiveUpdates() {
   socket.on("call:incoming", handleIncomingCall);
   socket.on("call:ringing", handleCallRinging);
   socket.on("call:answer", handleCallAnswer);
+  socket.on("call:restart-offer", handleCallRestartOffer);
+  socket.on("call:restart-answer", handleCallRestartAnswer);
   socket.on("call:ice-candidate", handleRemoteIceCandidate);
   socket.on("call:reaction", handleRemoteCallReaction);
   socket.on("call:reject", handleCallRejected);
@@ -5155,6 +5698,9 @@ function render() {
   const showLanding = !showChat && !showAdminDashboard;
   const showAuthRoute = showLanding && isAuthRoute(route);
   const showPublicRoute = showLanding && isPublicRoute(route);
+
+  if (!showProfile) profileDraftDirty = false;
+  if (!showChat || showContentPage) closeQuickFriendsPanel();
 
   elements.authView.classList.toggle("auth-route-mode", showAuthRoute);
   elements.authView.classList.toggle("public-page-route", showPublicRoute);
@@ -5580,16 +6126,29 @@ function renderSidebarDirectMessages() {
   }
 
   const query = String(elements.roomSearch?.value || "").trim().toLowerCase();
+  const archivedCount = (state.dmThreads || []).filter((thread) => thread.archived).length;
   const threads = (state.dmThreads || [])
+    .filter((thread) => state.showArchivedDms ? thread.archived : !thread.archived)
     .filter((thread) => {
       const person = thread.participant || {};
       if (!query) return true;
       return `${person.name || ""} ${person.username || ""} ${thread.lastMessageText || ""}`.toLowerCase().includes(query);
     })
-    .slice(0, 12);
+    .sort(compareDmThreads)
+    .slice(0, 20);
+
+  const filterRow = `
+    <div class="dm-list-filter">
+      <span>${state.showArchivedDms ? "Archived chats" : "Recent chats"}</span>
+      <button type="button" data-dm-action="toggle-archived">
+        ${state.showArchivedDms ? "Back" : `Archived${archivedCount ? ` (${archivedCount})` : ""}`}
+      </button>
+    </div>
+  `;
 
   if (!threads.length) {
     elements.sidebarDmList.innerHTML = `
+      ${filterRow}
       <div class="slack-dm-empty dm-sidebar-empty">
         <span class="avatar">DM</span>
         <div>
@@ -5601,22 +6160,118 @@ function renderSidebarDirectMessages() {
     return;
   }
 
-  elements.sidebarDmList.innerHTML = threads.map((thread) => {
+  elements.sidebarDmList.innerHTML = filterRow + threads.map((thread) => {
     const person = thread.participant || {};
     const active = isDmRoute() && activeDmThreadId() === String(thread.id);
     const unread = Number(thread.unreadCount || 0);
     const preview = thread.lastMessageText || (thread.lastMessage ? (thread.lastMessage.text || thread.lastMessage.attachment?.name) : "") || "Start a personal chat";
     return `
-    <button class="slack-dm-row ${active ? "active" : ""} ${unread ? "unread" : ""}" type="button" data-dm-thread-id="${escapeAttr(thread.id)}">
-      ${renderAvatar(person.name || "Friend", person.avatarColor, person.avatarDataUrl)}
-      <span class="dm-copy">
-        <strong>${escapeHtml(person.name || "Friend")}</strong>
-        <small>${escapeHtml(truncateText(preview, 34))}</small>
-      </span>
-      ${unread ? `<span class="dm-unread-count">${numberText(unread)}</span>` : `<time>${escapeHtml(thread.lastMessageAt ? relativeTime(thread.lastMessageAt) : "")}</time>`}
-    </button>
+    <div class="dm-row-shell ${thread.pinned ? "pinned" : ""} ${thread.muted ? "muted" : ""}">
+      <button class="slack-dm-row ${active ? "active" : ""} ${unread ? "unread" : ""}" type="button" data-dm-thread-id="${escapeAttr(thread.id)}">
+        ${renderAvatar(person.name || "Friend", person.avatarColor, person.avatarDataUrl)}
+        <span class="dm-copy">
+          <strong>${escapeHtml(person.name || "Friend")}</strong>
+          <small>${thread.pinned ? "PIN " : ""}${thread.muted ? "MUTED - " : ""}${escapeHtml(truncateText(preview, 30))}</small>
+        </span>
+        ${unread ? `<span class="dm-unread-count">${numberText(unread)}</span>` : `<time>${escapeHtml(thread.lastMessageAt ? relativeTime(thread.lastMessageAt) : "")}</time>`}
+      </button>
+      <button class="dm-row-more" type="button" data-dm-action="menu" data-thread-id="${escapeAttr(thread.id)}" aria-label="Chat options" aria-expanded="${state.activeDmMenuId === thread.id ? "true" : "false"}">...</button>
+      ${state.activeDmMenuId === thread.id ? renderDmThreadMenu(thread) : ""}
+    </div>
   `;
   }).join("");
+}
+
+function renderDmThreadMenu(thread) {
+  return `
+    <div class="dm-thread-menu" data-dm-menu>
+      <button type="button" data-dm-action="pin" data-thread-id="${escapeAttr(thread.id)}">${thread.pinned ? "Unpin" : "Pin chat"}</button>
+      <button type="button" data-dm-action="mute" data-thread-id="${escapeAttr(thread.id)}">${thread.muted ? "Unmute" : "Mute notifications"}</button>
+      <button type="button" data-dm-action="archive" data-thread-id="${escapeAttr(thread.id)}">${thread.archived ? "Unarchive" : "Archive"}</button>
+      <button type="button" data-dm-action="remove" data-thread-id="${escapeAttr(thread.id)}" class="danger">Remove chat</button>
+      <button type="button" data-dm-action="block" data-thread-id="${escapeAttr(thread.id)}" class="danger">Block user</button>
+    </div>
+  `;
+}
+
+function closeDmMenusFromOutside(event) {
+  if (!state.activeDmMenuId || event.target.closest("[data-dm-menu], [data-dm-action='menu']")) return;
+  state.activeDmMenuId = "";
+  renderSidebarDirectMessages();
+  renderMobileAppMenuDms();
+}
+
+async function handleDmThreadAction(button) {
+  const action = button.dataset.dmAction;
+  if (action === "toggle-archived") {
+    state.showArchivedDms = !state.showArchivedDms;
+    state.activeDmMenuId = "";
+    renderSidebarDirectMessages();
+    renderMobileAppMenuDms();
+    return;
+  }
+
+  const threadId = String(button.dataset.threadId || "");
+  const thread = findDmThread(threadId);
+  if (!thread) return;
+  if (action === "menu") {
+    state.activeDmMenuId = state.activeDmMenuId === threadId ? "" : threadId;
+    renderSidebarDirectMessages();
+    renderMobileAppMenuDms();
+    return;
+  }
+
+  state.activeDmMenuId = "";
+  if (["pin", "mute", "archive"].includes(action)) {
+    const property = action === "pin" ? "pinned" : action === "mute" ? "muted" : "archived";
+    const data = await api(`/api/dms/threads/${encodeURIComponent(threadId)}/preferences`, {
+      method: "PATCH",
+      body: { [property]: !thread[property] },
+    });
+    if (data.thread) upsertDmThread(data.thread);
+    if (property === "archived" && !thread.archived && activeDmThreadId() === threadId) navigateTo(DASHBOARD_ROUTE, { render: false });
+    render();
+    toast(property === "pinned" ? (thread.pinned ? "Chat unpinned." : "Chat pinned.") : property === "muted" ? (thread.muted ? "Notifications unmuted." : "Notifications muted.") : (thread.archived ? "Chat restored." : "Chat archived."));
+    return;
+  }
+
+  if (action === "remove") {
+    const confirmed = await showConfirmModal({
+      title: "Remove chat?",
+      body: "This conversation will be removed from your list. A new message can bring it back.",
+      confirmText: "Remove",
+      danger: true,
+    });
+    if (!confirmed) return;
+    await api(`/api/dms/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" });
+    state.dmThreads = state.dmThreads.filter((item) => String(item.id) !== threadId);
+    delete state.dmMessagesByThread[threadId];
+    if (activeDmThreadId() === threadId) navigateTo(DASHBOARD_ROUTE, { render: false });
+    render();
+    toast("Chat removed.");
+    return;
+  }
+
+  if (action === "block") {
+    const person = thread.participant || {};
+    const confirmed = await showConfirmModal({
+      title: `Block ${person.name || "this user"}?`,
+      body: "They will not be able to message or call you until you unblock them.",
+      confirmText: "Block",
+      danger: true,
+    });
+    if (!confirmed || !person.id) return;
+    await api("/api/users/block", {
+      method: "POST",
+      body: { blockedUserId: person.id },
+    });
+    state.session.user.blockedUserIds = uniqueList([...(state.session.user.blockedUserIds || []), String(person.id)]);
+    saveSession(state.session);
+    state.dmThreads = state.dmThreads.filter((item) => String(item.id) !== threadId);
+    if (activeDmThreadId() === threadId) navigateTo(DASHBOARD_ROUTE, { render: false });
+    render();
+    toast("User blocked.");
+  }
 }
 
 function renderChatRoomSummary() {
@@ -5977,6 +6632,11 @@ function cleanClientSearch(value) {
 }
 
 function handleHomeViewInput(event) {
+  if (event.target.closest("#profileForm")) {
+    profileDraftDirty = true;
+    return;
+  }
+
   const friendSearchInput = event.target.closest("#friendSearchInput");
   if (!friendSearchInput) return;
 
@@ -6068,6 +6728,9 @@ function normalizeDmThread(thread = {}) {
     lastMessageText: thread.lastMessageText || "",
     lastMessageAt: Number(thread.lastMessageAt || thread.updatedAt || thread.createdAt || 0),
     unreadCount: Math.max(0, Number(thread.unreadCount || 0)),
+    pinned: Boolean(thread.pinned),
+    muted: Boolean(thread.muted),
+    archived: Boolean(thread.archived),
     createdAt: Number(thread.createdAt || 0),
     updatedAt: Number(thread.updatedAt || 0),
     lastMessage: thread.lastMessage ? normalizeDmMessage(thread.lastMessage) : null,
@@ -6131,8 +6794,13 @@ function upsertDmThread(threadInput) {
   }
   state.dmThreads = state.dmThreads
     .filter((item) => item.id)
-    .sort((a, b) => Number(b.lastMessageAt || b.updatedAt || 0) - Number(a.lastMessageAt || a.updatedAt || 0));
+    .sort(compareDmThreads);
   return thread;
+}
+
+function compareDmThreads(a, b) {
+  if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+  return Number(b.lastMessageAt || b.updatedAt || 0) - Number(a.lastMessageAt || a.updatedAt || 0);
 }
 
 function upsertDmMessage(threadId, messageInput) {
@@ -6228,7 +6896,7 @@ async function loadDmMessagesForThread(threadId, options = {}) {
   if (options.renderLoading && activeDmThreadId() === id) renderDmMessages({ preserveScroll: true });
 
   try {
-    const data = await api(`/api/dms/threads/${encodeURIComponent(id)}/messages`);
+    const data = await api(`/api/dms/threads/${encodeURIComponent(id)}/messages?limit=50`);
     if (data.thread) upsertDmThread(data.thread);
     const loadedMessages = (data.messages || []).map(normalizeDmMessage);
     state.dmMessagesByThread = {
@@ -6238,6 +6906,13 @@ async function loadDmMessagesForThread(threadId, options = {}) {
     state.dmMessagesLoadedAt = {
       ...state.dmMessagesLoadedAt,
       [id]: Date.now(),
+    };
+    state.dmMessagePaginationByThread = {
+      ...state.dmMessagePaginationByThread,
+      [id]: {
+        hasMore: Boolean(data.hasMore),
+        nextCursor: data.nextCursor || null,
+      },
     };
   } finally {
     state.dmMessagesLoading = false;
@@ -6348,7 +7023,6 @@ async function handleDmMessageSubmit({ text, attachment }) {
   lastMessageSubmitKey = submitKey;
   window.clearTimeout(messageSubmitCooldownTimer);
 
-  let clientTempId = "";
   const replyToMessageId = state.replyToMessageId;
 
   try {
@@ -6357,9 +7031,19 @@ async function handleDmMessageSubmit({ text, attachment }) {
       toast("Editing is available for room messages only right now.");
     }
 
-    clientTempId = createClientTempId();
+    const clientTempId = createClientTempId();
     const pendingMessage = createOptimisticDmMessage({ threadId, text, attachment, replyToMessageId, clientTempId });
     upsertDmMessage(threadId, pendingMessage);
+    const outboxItem = createOutboxItem({
+      kind: "dm",
+      clientTempId,
+      threadId,
+      text,
+      replyToMessageId,
+      attachment,
+      optimisticMessage: pendingMessage,
+    });
+    enqueueOutboxItem(outboxItem);
 
     elements.messageInput.value = "";
     state.replyToMessageId = null;
@@ -6368,40 +7052,9 @@ async function handleDmMessageSubmit({ text, attachment }) {
     renderDmMessages({ preserveScroll: true });
     sendTyping(false);
 
-    const result = await api(`/api/dms/threads/${encodeURIComponent(threadId)}/messages`, {
-      method: "POST",
-      body: {
-        token: state.session.token,
-        text,
-        replyToMessageId,
-        attachment,
-        clientTempId,
-      },
-    });
-
-    if (result.thread) upsertDmThread(result.thread);
-    if (result.message) {
-      upsertDmMessage(threadId, { ...result.message, clientTempId: result.message.clientTempId || clientTempId });
-      renderDmMessages({ preserveScroll: true });
-      renderDmThreadSummary();
-      renderSidebarDirectMessages();
-    }
+    await sendOutboxItem(outboxItem, { notify: true });
   } catch (error) {
     console.error("DM send failed:", error);
-    const failed = dmMessagesForThread(threadId).find((message) =>
-      message.localStatus === "pending" &&
-      (message.clientTempId === clientTempId || message.submitKey === submitKey)
-    );
-    if (failed) {
-      failed.localStatus = "failed";
-      state.dmMessagesByThread = {
-        ...state.dmMessagesByThread,
-        [threadId]: dmMessagesForThread(threadId).map((message) => (
-          String(message.id) === String(failed.id) ? failed : message
-        )),
-      };
-      renderDmMessages({ preserveScroll: true });
-    }
     if (isSessionExpiredError(error)) {
       handleApiError(error);
     } else {
@@ -6479,6 +7132,19 @@ function renderDmMessages(options = {}) {
   let lastDateKey = "";
   let previousMessage = null;
   const descriptors = [];
+  if (state.dmMessagePaginationByThread[threadId]?.hasMore) {
+    descriptors.push({
+      key: "load-more",
+      html: `
+        <button
+          class="load-more-btn"
+          type="button"
+          id="loadMoreMessages">
+          Load earlier messages
+        </button>
+      `,
+    });
+  }
   messages.forEach((message) => {
     const dateKey = dateSeparatorKey(message.createdAt);
     if (dateKey !== lastDateKey) {
@@ -6516,13 +7182,53 @@ function renderDmMessages(options = {}) {
   updateScrollToBottomButton();
 }
 
+async function loadEarlierDmMessages(button) {
+  const threadId = activeDmThreadId();
+  const pagination = state.dmMessagePaginationByThread[threadId] || {};
+  if (!threadId || pagination.hasMore === false) return;
+  const messages = dmMessagesForThread(threadId).sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
+  const first = messages[0];
+  const cursor = pagination.nextCursor || (first ? new Date(Number(first.createdAt)).toISOString() : "");
+  if (!cursor) return;
+
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Loading...";
+
+  try {
+    const data = await api(`/api/dms/threads/${encodeURIComponent(threadId)}/messages?limit=50&cursor=${encodeURIComponent(cursor)}`);
+    if (data.thread) upsertDmThread(data.thread);
+    state.dmMessagesByThread = {
+      ...state.dmMessagesByThread,
+      [threadId]: mergeDmMessageLists(
+        dmMessagesForThread(threadId),
+        (data.messages || []).map(normalizeDmMessage)
+      ),
+    };
+    state.dmMessagePaginationByThread = {
+      ...state.dmMessagePaginationByThread,
+      [threadId]: {
+        hasMore: Boolean(data.hasMore),
+        nextCursor: data.nextCursor || null,
+      },
+    };
+    renderDmMessages({ preserveScroll: true, preserveVisualOffset: true });
+  } catch (error) {
+    handleApiError(error);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
 function stableDmMessageRenderKey(message = {}) {
   return String(message.clientTempId || message.id || message._id || message.createdAt || "");
 }
 
 function dmDeliveryLabel(message) {
   if (message.localStatus === "pending") return "Sending...";
-  if (message.localStatus === "failed") return "Failed";
+  if (message.localStatus === "queued") return "Waiting for connection";
+  if (message.localStatus === "failed") return "Retry";
   const currentUserId = String(state.session?.user?.id || "");
   const delivery = normalizeDelivery(message.delivery);
   const seenByOther = delivery.seenBy.some((userId) => String(userId) !== currentUserId);
@@ -6542,6 +7248,8 @@ function renderDmMessage(message, grouped = false) {
   const delivery = normalizeDelivery(message.delivery);
   const deliveryClass = message.localStatus === "failed"
     ? "failed"
+    : message.localStatus === "queued"
+      ? "queued"
     : message.localStatus === "pending"
       ? "pending"
       : delivery.seenBy.length > 1 || (!mine && delivery.seenBy.length)
@@ -6549,7 +7257,7 @@ function renderDmMessage(message, grouped = false) {
         : delivery.deliveredTo.length
           ? "delivered"
           : "sent";
-  const deliveryStatus = mine ? `<span class="delivery-status ${deliveryClass}">${dmDeliveryLabel(message)}</span>` : "";
+  const deliveryStatus = mine ? renderDeliveryStatus(message, deliveryClass, dmDeliveryLabel(message)) : "";
   const replyBlock = message.replyTo && !deleted
     ? `<div class="message-reply"><strong>${escapeHtml(message.replyTo.author || "Message")}</strong><span>${escapeHtml(message.replyTo.text || "Attachment")}</span></div>`
     : "";
@@ -6613,6 +7321,7 @@ function handleDmMessageRealtime(payload = {}) {
   upsertDmMessage(threadId, message);
   const active = isDmRoute() && activeDmThreadId() === threadId;
   const mine = String(message.senderId) === String(state.session?.user?.id);
+  if (!mine) markDmMessageDelivered(message);
 
   if (active) {
     state.typing = state.typing.filter((item) => !(item.dm && String(item.threadId) === threadId && String(item.userId) === String(message.senderId)));
@@ -6634,6 +7343,28 @@ function handleDmMessageRealtime(payload = {}) {
   renderMobileAppMenuDms();
   renderNotifications();
   if (state.route === NOTIFICATIONS_ROUTE) renderNotificationsPage();
+}
+
+function markDmMessageDelivered(message = {}) {
+  if (!socket?.connected || !state.session?.token || isAdmin()) return;
+  const currentUserId = String(state.session?.user?.id || "");
+  if (!message.id || String(message.recipientId || "") !== currentUserId) return;
+  if (normalizeDelivery(message.delivery).deliveredTo.map(String).includes(currentUserId)) return;
+  socket.emit("dm:delivered", {
+    token: state.session.token,
+    threadId: message.threadId,
+    messageId: message.id,
+  });
+}
+
+function handleDmDeliveryRealtime(payload = {}) {
+  const message = payload.message ? normalizeDmMessage(payload.message) : null;
+  const threadId = String(message?.threadId || payload.threadId || "");
+  if (!threadId || !message?.id) return;
+  upsertDmMessage(threadId, message);
+  if (isDmRoute() && activeDmThreadId() === threadId) renderDmMessages({ preserveScroll: true });
+  renderSidebarDirectMessages();
+  renderMobileAppMenuDms();
 }
 
 function handleDmSeenRealtime(payload = {}) {
@@ -7109,7 +7840,11 @@ async function submitCreateRoom(event) {
 function renderProfilePage() {
   if (!elements.homeView) return;
   const user = state.session.user;
+  if (profileDraftDirty && elements.homeView.querySelector("#profileForm")) return;
+
   pendingAvatarDataUrl = "";
+  pendingAvatarPublicId = "";
+  profileDraftDirty = false;
   elements.homeView.innerHTML = `
     <div class="profile-route-page">
       <div class="home-header profile-page-head">
@@ -7124,6 +7859,7 @@ function renderProfilePage() {
 }
 
 function profileFormMarkup(user) {
+  const hasPhoto = Boolean(user.avatarDataUrl || pendingAvatarDataUrl);
   return `
     <form class="profile-form profile-page-form" id="profileForm">
       <div class="profile-large">
@@ -7133,6 +7869,21 @@ function profileFormMarkup(user) {
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
         </button>
+        <div class="profile-photo-actions" aria-label="Profile photo actions">
+          <button class="profile-photo-action change" type="button" id="changeProfilePhotoButton">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
+              <circle cx="12" cy="13" r="3" />
+            </svg>
+            <span>${hasPhoto ? "Change photo" : "Add photo"}</span>
+          </button>
+          <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${hasPhoto ? "" : "disabled"}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
+            </svg>
+            <span>Remove</span>
+          </button>
+        </div>
         <h2>${escapeHtml(user.name)}</h2>
         <p class="muted">@${escapeHtml(user.username)} - ${escapeHtml(user.campus)}</p>
       </div>
@@ -7552,10 +8303,12 @@ function initPwaExperience() {
         debugSocketWarning("Service worker registration failed:", error.message);
       });
     navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data?.type === "anonchat:push-subscription-change") {
+        syncWebPushSubscription().catch(debugSocketWarning);
+        return;
+      }
       if (event.data?.type !== "anonchat:notification-click") return;
-      if (event.data.dmThreadId) openDmThread(event.data.dmThreadId);
-      else if (event.data.roomId) handleJoinRoom(event.data.roomId);
-      else navigateTo(CHAT_ROUTE);
+      handleNotificationNavigation(event.data).catch(handleApiError);
     });
   }
 
@@ -7574,6 +8327,95 @@ function initPwaExperience() {
 
   window.matchMedia?.("(display-mode: standalone)")?.addEventListener?.("change", updateInstallButtonState);
   updateInstallButtonState();
+}
+
+function normalizeNotificationTarget(data = {}) {
+  let url = String(data.url || "").trim();
+  let dmThreadId = String(data.dmThreadId || "").trim();
+  let roomId = String(data.roomId || "").trim();
+
+  try {
+    const parsed = new URL(url || CHAT_ROUTE, window.location.origin);
+    if (!dmThreadId && parsed.pathname.startsWith(`${DM_ROUTE_PREFIX}/`)) {
+      dmThreadId = decodeURIComponent(parsed.pathname.slice(DM_ROUTE_PREFIX.length + 1));
+    }
+    if (!roomId) roomId = parsed.searchParams.get("room") || "";
+    url = `${parsed.pathname}${parsed.search}`;
+  } catch {
+    url = CHAT_ROUTE;
+  }
+
+  if (dmThreadId) url = `${DM_ROUTE_PREFIX}/${encodeURIComponent(dmThreadId)}`;
+  return { url: url || CHAT_ROUTE, dmThreadId, roomId };
+}
+
+function captureInitialNotificationTarget() {
+  if (state.session?.token) return;
+  const route = normalizeRoute(window.location.pathname);
+  const roomId = new URL(window.location.href).searchParams.get("room") || "";
+  if (!isDmRoute(route) && !roomId) return;
+  storePendingNotificationTarget(normalizeNotificationTarget({
+    url: `${window.location.pathname}${window.location.search}`,
+    dmThreadId: isDmRoute(route) ? activeDmThreadId(route) : "",
+    roomId,
+  }));
+}
+
+function storePendingNotificationTarget(target) {
+  try {
+    localStorage.setItem(PENDING_NOTIFICATION_TARGET_KEY, JSON.stringify({
+      ...target,
+      createdAt: Date.now(),
+    }));
+  } catch {
+    // Navigation still works in the current tab when storage is unavailable.
+  }
+}
+
+function clearPendingNotificationTarget() {
+  localStorage.removeItem(PENDING_NOTIFICATION_TARGET_KEY);
+}
+
+async function handleNotificationNavigation(data = {}, options = {}) {
+  const target = normalizeNotificationTarget(data);
+  if (!state.session?.token || isGuestSession() || isAdmin()) {
+    if (options.persist !== false) storePendingNotificationTarget(target);
+    openAuthRoute("login");
+    return false;
+  }
+
+  clearPendingNotificationTarget();
+  if (target.dmThreadId) {
+    await loadDmThreads({ force: true });
+    await loadDmMessagesForThread(target.dmThreadId, { force: true }).catch(() => {});
+    openDmThread(target.dmThreadId);
+    return true;
+  }
+  if (target.roomId) {
+    navigateTo(CHAT_ROUTE, { render: false });
+    await Promise.resolve(handleJoinRoom(target.roomId));
+    return true;
+  }
+
+  const route = normalizeRoute(new URL(target.url, window.location.origin).pathname);
+  navigateTo(route === LANDING_ROUTE ? CHAT_ROUTE : route);
+  return true;
+}
+
+async function consumePendingNotificationTarget() {
+  if (!state.session?.token || isGuestSession() || isAdmin()) return false;
+  let target = null;
+  try {
+    target = JSON.parse(localStorage.getItem(PENDING_NOTIFICATION_TARGET_KEY) || "null");
+  } catch {
+    clearPendingNotificationTarget();
+  }
+  if (!target) return false;
+  if (Date.now() - Number(target.createdAt || 0) > 24 * 60 * 60 * 1000) {
+    clearPendingNotificationTarget();
+    return false;
+  }
+  return handleNotificationNavigation(target, { persist: false });
 }
 
 async function installPwaApp() {
@@ -7753,9 +8595,7 @@ async function showBrowserNotification(title, options = {}) {
   const notification = new Notification(title, payload);
   notification.onclick = () => {
     window.focus();
-    if (payload.data?.dmThreadId) openDmThread(payload.data.dmThreadId);
-    else if (payload.data?.roomId) handleJoinRoom(payload.data.roomId);
-    else if (payload.data?.url) navigateTo(payload.data.url);
+    handleNotificationNavigation(payload.data).catch(handleApiError);
     notification.close();
   };
 }
@@ -7764,6 +8604,7 @@ function handleVisibilityChange() {
   if (document.visibilityState === "visible") {
     stopCallRingtone();
     renderNotifications();
+    syncWebPushSubscription().catch(debugSocketWarning);
   }
 }
 
@@ -7787,7 +8628,7 @@ function notifyIncomingDmMessage(message, thread = {}) {
   const settings = loadUserSettings();
   const threadId = String(message.threadId || thread.id || "");
   const active = document.visibilityState === "visible" && isDmRoute() && activeDmThreadId() === threadId;
-  if (active) return;
+  if (active || thread.muted) return;
 
   if (settings.sound && (document.visibilityState === "visible" || !webPushSubscriptionActive)) {
     playMessageSound();
@@ -7807,11 +8648,14 @@ function notifyIncomingDmMessage(message, thread = {}) {
 function notifyIncomingCall(payload = {}) {
   const caller = normalizeCallPeer(payload.caller);
   playCallRingtone();
+  const dmThreadId = String(payload.dmThreadId || "");
+  if (webPushSubscriptionActive && document.visibilityState !== "visible") return;
   showBrowserNotification(`Incoming ${payload.type || "audio"} call`, {
     body: caller.name || "Anonymous User",
     tag: `call-${payload.callId || Date.now()}`,
     roomId: payload.roomId || state.activeRoomId,
-    url: "/chat",
+    dmThreadId,
+    url: dmThreadId ? `${DM_ROUTE_PREFIX}/${encodeURIComponent(dmThreadId)}` : "/chat",
   });
 }
 
@@ -7832,17 +8676,23 @@ function playMessageSound() {
 
 function playCallRingtone() {
   const settings = loadUserSettings();
-  if (settings.sound === false) return;
   stopCallRingtone();
-  playToneSequence([{ frequency: 784, duration: 0.16 }, { frequency: 988, duration: 0.16 }], 0.06);
-  ringtoneTimer = window.setInterval(() => {
+  navigator.vibrate?.([250, 120, 250]);
+  if (settings.sound !== false) {
     playToneSequence([{ frequency: 784, duration: 0.16 }, { frequency: 988, duration: 0.16 }], 0.06);
+  }
+  ringtoneTimer = window.setInterval(() => {
+    navigator.vibrate?.([250, 120, 250]);
+    if (settings.sound !== false) {
+      playToneSequence([{ frequency: 784, duration: 0.16 }, { frequency: 988, duration: 0.16 }], 0.06);
+    }
   }, 1600);
 }
 
 function stopCallRingtone() {
   window.clearInterval(ringtoneTimer);
   ringtoneTimer = null;
+  navigator.vibrate?.(0);
 }
 
 function playToneSequence(notes, gap = 0.04) {
@@ -7997,6 +8847,13 @@ function handleChatShellClick(event) {
     return;
   }
 
+  if (
+    elements.detailsPanel?.classList.contains("open") &&
+    !event.target.closest("#detailsPanel, #togglePanel")
+  ) {
+    closeQuickFriendsPanel();
+  }
+
   if (!elements.sidebar?.classList.contains("open")) return;
   if (event.target.closest("#sidebar") || event.target.closest("#hamburgerBtn, #openSidebar")) return;
   closeMobileSidebar();
@@ -8056,32 +8913,48 @@ function renderMobileAppMenuRooms() {
 
 function renderMobileAppMenuDms() {
   if (!elements.mobileMenuDms) return;
-  const threads = (state.dmThreads || []).slice(0, 8);
+  const threads = (state.dmThreads || [])
+    .filter((thread) => state.showArchivedDms ? thread.archived : !thread.archived)
+    .sort(compareDmThreads)
+    .slice(0, 12);
 
   if (!threads.length) {
     elements.mobileMenuDms.innerHTML = `
+      <div class="dm-list-filter mobile-dm-filter">
+        <span>${state.showArchivedDms ? "Archived" : "Chats"}</span>
+        <button type="button" data-dm-action="toggle-archived">${state.showArchivedDms ? "Back" : "Archived"}</button>
+      </div>
       <div class="menu-empty-state">
-        ${state.dmThreadsLoading ? "Loading personal chats..." : "No personal chats yet"}
+        ${state.dmThreadsLoading ? "Loading personal chats..." : state.showArchivedDms ? "No archived chats" : "No personal chats yet"}
       </div>
     `;
     return;
   }
 
-  elements.mobileMenuDms.innerHTML = threads.map((thread) => {
+  elements.mobileMenuDms.innerHTML = `
+    <div class="dm-list-filter mobile-dm-filter">
+      <span>${state.showArchivedDms ? "Archived" : "Chats"}</span>
+      <button type="button" data-dm-action="toggle-archived">${state.showArchivedDms ? "Back" : "Archived"}</button>
+    </div>
+  ` + threads.map((thread) => {
     const person = thread.participant || {};
     const active = isDmRoute() && activeDmThreadId() === String(thread.id);
     const unread = Number(thread.unreadCount || 0);
     const preview = thread.lastMessageText || "Personal chat";
     return `
-      <button type="button" class="${active ? "active" : ""} ${unread ? "unread" : ""}" data-mobile-dm-thread-id="${escapeAttr(thread.id)}">
-        ${renderAvatar(person.name || "Friend", person.avatarColor, person.avatarDataUrl, "room-icon")}
-        <span>
-          <strong>${escapeHtml(person.name || "Friend")}</strong>
-          <small>${escapeHtml(truncateText(preview, 34))}</small>
-        </span>
-        ${unread ? `<em class="room-current dm-current">${numberText(unread)}</em>` : active ? `<em class="room-current">Current</em>` : ""}
-      </button>
-    `;
+      <div class="mobile-dm-row">
+        <button type="button" class="${active ? "active" : ""} ${unread ? "unread" : ""}" data-mobile-dm-thread-id="${escapeAttr(thread.id)}">
+          ${renderAvatar(person.name || "Friend", person.avatarColor, person.avatarDataUrl, "room-icon")}
+          <span>
+            <strong>${thread.pinned ? "PIN " : ""}${escapeHtml(person.name || "Friend")}</strong>
+            <small>${thread.muted ? "Muted - " : ""}${escapeHtml(truncateText(preview, 28))}</small>
+          </span>
+          ${unread ? `<em class="room-current dm-current">${numberText(unread)}</em>` : active ? `<em class="room-current">Current</em>` : ""}
+        </button>
+        <button class="dm-row-more" type="button" data-dm-action="menu" data-thread-id="${escapeAttr(thread.id)}" aria-label="Chat options">...</button>
+        ${state.activeDmMenuId === thread.id ? renderDmThreadMenu(thread) : ""}
+      </div>
+  `;
   }).join("");
 }
 
@@ -8132,6 +9005,13 @@ function handleMobileAppMenuClick(event) {
   if (event.target.closest("[data-mobile-menu-close]")) {
     claimClick(event);
     closeMobileAppMenu();
+    return;
+  }
+
+  const dmAction = event.target.closest("[data-dm-action]");
+  if (dmAction) {
+    claimClick(event);
+    handleDmThreadAction(dmAction).catch(handleApiError);
     return;
   }
 
@@ -9465,7 +10345,7 @@ function renderMessages(options = {}) {
     return;
   }
 
-  const hasMore = messages.length >= 50;
+  const hasMore = roomMessagePagination.get(String(activeRoom.id || ""))?.hasMore === true;
   let lastDateKey = "";
   let previousMessage = null;
   const descriptors = [];
@@ -9647,20 +10527,31 @@ function chatFeedSignature(value) {
 }
 
 async function loadEarlierMessages(button) {
+  if (isDmRoute()) {
+    await loadEarlierDmMessages(button);
+    return;
+  }
+
   const activeRoom = getActiveRoom();
   const roomMessages = state.messages
     .filter((message) => message.roomId === activeRoom.id)
     .sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
   const first = roomMessages[0];
   if (!first) return;
+  const pagination = roomMessagePagination.get(String(activeRoom.id || "")) || {};
+  if (pagination.hasMore === false) return;
 
   const originalText = button.textContent;
   button.disabled = true;
   button.textContent = "Loading...";
 
   try {
-    const before = new Date(Number(first.createdAt)).toISOString();
-    const data = await api(`/api/messages?roomId=${encodeURIComponent(activeRoom.id)}&limit=50&before=${encodeURIComponent(before)}`);
+    const cursor = pagination.nextCursor || new Date(Number(first.createdAt)).toISOString();
+    const data = await api(`/api/messages?roomId=${encodeURIComponent(activeRoom.id)}&limit=50&cursor=${encodeURIComponent(cursor)}`);
+    roomMessagePagination.set(String(activeRoom.id), {
+      hasMore: Boolean(data.hasMore),
+      nextCursor: data.nextCursor || null,
+    });
     (data.messages || []).forEach(upsertMessage);
     renderMessages({ preserveScroll: true, preserveVisualOffset: true });
   } catch (error) {
@@ -9682,6 +10573,10 @@ async function loadRecentMessagesForRoom(roomId, options = {}) {
   const fetchToken = ++roomMessageFetchToken;
   const data = await api(`/api/messages?roomId=${encodeURIComponent(normalizedRoomId)}&limit=50`);
   const incomingMessages = data.messages || [];
+  roomMessagePagination.set(normalizedRoomId, {
+    hasMore: Boolean(data.hasMore),
+    nextCursor: data.nextCursor || null,
+  });
   if (!incomingMessages.length) return;
 
   incomingMessages.forEach(upsertMessage);
@@ -9748,6 +10643,8 @@ function renderMessage(message, grouped = false) {
   const delivery = normalizeDelivery(message.delivery);
   const deliveryClass = message.localStatus === "failed"
     ? "failed"
+    : message.localStatus === "queued"
+      ? "queued"
     : message.localStatus === "pending"
       ? "pending"
       : delivery.seenBy.length
@@ -9755,7 +10652,7 @@ function renderMessage(message, grouped = false) {
         : delivery.deliveredTo.length
           ? "delivered"
           : "sent";
-  const deliveryStatus = mine ? `<span class="delivery-status ${deliveryClass}">${messageDeliveryLabel(message)}</span>` : "";
+  const deliveryStatus = mine ? renderDeliveryStatus(message, deliveryClass, messageDeliveryLabel(message)) : "";
   const replyBlock = message.replyTo && !deleted
     ? `<div class="message-reply" role="button" tabindex="0" data-jump-message-id="${escapeAttr(message.replyTo.id || message.replyTo.messageId || "")}" title="Jump to original message">
         <strong>${escapeHtml(message.replyTo.author || "Message")}</strong>
@@ -10573,11 +11470,20 @@ function dateSeparatorKey(timestamp) {
 
 function messageDeliveryLabel(message) {
   if (message.localStatus === "pending") return "Sending...";
-  if (message.localStatus === "failed") return "Failed";
+  if (message.localStatus === "queued") return "Waiting for connection";
+  if (message.localStatus === "failed") return "Retry";
   const delivery = normalizeDelivery(message.delivery);
   if (delivery.seenBy.length > 0) return "\u2713\u2713 Seen";
   if (delivery.deliveredTo.length > 0) return "\u2713\u2713 Delivered";
   return "\u2713 Sent";
+}
+
+function renderDeliveryStatus(message, deliveryClass, label) {
+  const retryable = ["queued", "failed"].includes(String(message.localStatus || ""));
+  if (retryable && message.clientTempId) {
+    return `<button class="delivery-status delivery-retry ${escapeAttr(deliveryClass)}" type="button" data-message-retry="${escapeAttr(message.clientTempId)}" title="${message.localStatus === "queued" ? "Send now" : "Retry sending"}">${escapeHtml(label)}</button>`;
+  }
+  return `<span class="delivery-status ${escapeAttr(deliveryClass)}">${escapeHtml(label)}</span>`;
 }
 
 function messageDeliveryText(message) {
@@ -10738,6 +11644,7 @@ function AdminPageContent(route = currentAdminRoute()) {
   if (route === ADMIN_ROUTES.reports) return AdminReportsPage();
   if (route === ADMIN_ROUTES.blockedUsers) return AdminBlockedUsersPage();
   if (route === ADMIN_ROUTES.messagesMonitoring) return AdminMessagesMonitoringPage();
+  if (route === ADMIN_ROUTES.auditLog) return AdminAuditLogPage();
   if (route === ADMIN_ROUTES.announcements) return AdminAnnouncementsPage();
   if (route === ADMIN_ROUTES.settings) return AdminSettingsPage();
   return AdminDashboardHome();
@@ -10747,8 +11654,9 @@ function AdminDashboardHome() {
   const users = state.admin.users || [];
   const reports = state.admin.reports || [];
   const messages = state.admin.messages || state.messages || [];
-  const rooms = state.rooms || [];
-  const blockedUsers = users.filter((user) => user.status === "suspended").length;
+  const rooms = state.admin.rooms?.length ? state.admin.rooms : state.rooms || [];
+  const totalUsers = state.admin.pagination?.users?.total ?? state.stats.totalUsers ?? users.length;
+  const blockedUsers = state.stats.suspendedUsers ?? users.filter((user) => user.status === "suspended").length;
   const messagesToday = state.stats.messagesToday ?? messages.filter((message) => isSameDay(message.createdAt, Date.now())).length;
   const activeUsers = state.stats.activeUsers ?? users.filter((user) => user.role !== "admin" && user.status !== "deleted").length;
   const callsToday = state.stats.callsToday ?? state.admin.stats?.callsToday ?? 0;
@@ -10756,10 +11664,10 @@ function AdminDashboardHome() {
 
   return `
     <div class="admin-stat-grid">
-      ${StatCard("Total Users", numberText(users.length), "")}
+      ${StatCard("Total Users", numberText(totalUsers), "")}
       ${StatCard("Active Users", numberText(activeUsers), "")}
       ${StatCard("Total Rooms", numberText(rooms.length), "")}
-      ${StatCard("Reports Pending", numberText(reports.filter((report) => report.status === "open").length), "", "negative")}
+      ${StatCard("Reports Pending", numberText(state.stats.reportsPending ?? reports.filter((report) => report.status === "open").length), "", "negative")}
       ${StatCard("Blocked Users", numberText(blockedUsers), "")}
       ${StatCard("Messages Today", numberText(messagesToday), "")}
       ${StatCard("Calls Today", numberText(callsToday), "metadata only")}
@@ -10859,7 +11767,7 @@ function ActivityChart() {
 
 function SystemOverview() {
   const rooms = state.admin.rooms?.length || state.rooms.length;
-  const users = state.admin.users?.length || state.stats.users || state.stats.totalUsers || 0;
+  const users = state.admin.pagination?.users?.total ?? state.stats.totalUsers ?? state.admin.users?.length ?? state.stats.users ?? 0;
   const openReports = state.admin.reports?.filter((report) => report.status === "open").length || state.stats.openReports || 0;
 
   return `
@@ -10891,6 +11799,7 @@ function adminMenuIcon(label) {
     Reports: "RP",
     "Blocked Users": "BU",
     "Messages Monitoring": "MM",
+    "Audit Log": "AL",
     Announcements: "AN",
     Settings: "ST",
   };
@@ -10970,6 +11879,9 @@ function AdminChatRoomsPage() {
 
 function AdminReportsPage() {
   const reports = adminReportsForPage();
+  const selectedIds = selectedAdminReportIds();
+  const selectableIds = reports.filter((report) => report.id && report.status !== "deleted").map((report) => String(report.id));
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
 
   return `
     <div class="admin-page-grid">
@@ -10981,20 +11893,28 @@ function AdminReportsPage() {
       <div class="admin-panel-head">
         <h2>Reports Queue</h2>
         <div class="admin-page-actions">
+          <span class="admin-selection-count">${selectedIds.size} selected</span>
+          <button class="admin-secondary-action" type="button" data-admin-dashboard-action="toggle-select-reports">${allSelected ? "Clear selection" : "Select all"}</button>
+          <button class="admin-secondary-action" type="button" data-admin-dashboard-action="bulk-report" data-report-action="hide" ${selectedIds.size ? "" : "disabled"}>Hide</button>
+          <button class="admin-secondary-action" type="button" data-admin-dashboard-action="bulk-report" data-report-action="dismiss" ${selectedIds.size ? "" : "disabled"}>Dismiss</button>
+          <button class="admin-secondary-action danger" type="button" data-admin-dashboard-action="bulk-report" data-report-action="delete" ${selectedIds.size ? "" : "disabled"}>Delete</button>
           <button class="admin-secondary-action" type="button" data-admin-dashboard-action="refresh-admin">Refresh</button>
         </div>
       </div>
       ${AdminTable(
-        ["User", "Report Type", "Status", "Time", "Actions"],
+        ["Select", "User", "Report Type", "Status", "Time", "Actions"],
         reports.map((report) => {
           const real = Boolean(report.id);
           return [
+            real && report.status !== "deleted"
+              ? `<label class="admin-check"><input type="checkbox" data-admin-report-select="${escapeAttr(report.id)}" ${selectedIds.has(String(report.id)) ? "checked" : ""} aria-label="Select report" /><span></span></label>`
+              : "",
             `<div class="admin-table-user"><span>${escapeHtml(String(report.user || "U").slice(-2))}</span><strong>${escapeHtml(report.user || "Anonymous User")}</strong><small>${escapeHtml(report.reporter || "Community report")}</small></div>`,
-            `<span>${escapeHtml(report.type || report.reason || "Report")}</span><small>${escapeHtml(report.preview || "Message review required")}</small>`,
+            `<span>${escapeHtml(report.type || report.reason || "Report")}</span><small>${escapeHtml(report.preview || "Message review required")}</small>${report.adminNote ? `<small class="admin-note">Note: ${escapeHtml(report.adminNote)}</small>` : ""}`,
             AdminStatusPill(report.status || "open"),
             `<span>${escapeHtml(report.time || relativeTime(report.createdAt || Date.now()))}</span>`,
             real
-              ? `<div class="admin-row-actions"><button type="button" data-admin-action="hide" data-report-id="${escapeAttr(report.id)}">Hide</button><button type="button" data-admin-action="dismiss" data-report-id="${escapeAttr(report.id)}">Dismiss</button></div>`
+              ? AdminReportActions(report)
               : `<div class="admin-row-actions"><button type="button" disabled>View</button></div>`,
           ];
         }),
@@ -11012,7 +11932,7 @@ function AdminBlockedUsersPage() {
     <div class="admin-page-grid">
       ${AdminMiniMetric("Blocked Users", blockedUsers.length, "Suspended accounts")}
       ${AdminMiniMetric("Open Reports", openReports, "Needs follow-up")}
-      ${AdminMiniMetric("Reactivated", state.admin.auditLogs?.filter((log) => log.action === "user_reactivated").length || 0, "Audit log")}
+      ${AdminMiniMetric("Reactivated", state.admin.auditLogs?.filter((log) => log.action === "user:reactivate").length || 0, "Audit log")}
     </div>
     <section class="admin-panel admin-wide-panel">
       <div class="admin-panel-head">
@@ -11562,16 +12482,34 @@ function adminReportsForPage() {
   if (reports.length) {
     return reports.map((report) => ({
       id: report.id,
-      user: report.message?.userName || "Anonymous User",
+      user: report.message?.author || report.message?.userName || "Anonymous User",
       reporter: report.reporterName || "Community member",
       type: report.reason || "Report",
       status: report.status || "open",
       time: relativeTime(report.createdAt || Date.now()),
       preview: report.message?.text || "Message review required",
+      adminNote: report.adminNote || "",
+      createdAt: report.createdAt,
     }));
   }
 
   return [];
+}
+
+function selectedAdminReportIds() {
+  if (!(state.adminSelectedReportIds instanceof Set)) {
+    state.adminSelectedReportIds = new Set(state.adminSelectedReportIds || []);
+  }
+  const validIds = new Set(
+    (state.admin.reports || [])
+      .filter((report) => report.status !== "deleted")
+      .map((report) => String(report.id || ""))
+      .filter(Boolean)
+  );
+  for (const id of state.adminSelectedReportIds) {
+    if (!validIds.has(String(id))) state.adminSelectedReportIds.delete(id);
+  }
+  return state.adminSelectedReportIds;
 }
 
 function adminMessagesForPage() {
@@ -11637,6 +12575,16 @@ async function handleAdminDashboardClick(event) {
     return;
   }
 
+  const reportSelection = event.target.closest("[data-admin-report-select]");
+  if (reportSelection) {
+    const reportId = String(reportSelection.dataset.adminReportSelect || "");
+    const selectedIds = selectedAdminReportIds();
+    if (reportSelection.checked) selectedIds.add(reportId);
+    else selectedIds.delete(reportId);
+    renderAdminDashboard();
+    return;
+  }
+
   const moderationAction = event.target.closest("[data-admin-action]");
   if (moderationAction) {
     handleAdminPanelClick(event);
@@ -11669,6 +12617,65 @@ async function handleAdminDashboardClick(event) {
 
     if (actionName === "profile") {
       navigateTo(ADMIN_ROUTES.settings);
+      return;
+    }
+
+    if (actionName === "toggle-select-reports") {
+      const selectedIds = selectedAdminReportIds();
+      const reportIds = adminReportsForPage()
+        .filter((report) => report.status !== "deleted")
+        .map((report) => String(report.id || ""))
+        .filter(Boolean);
+      const allSelected = reportIds.length > 0 && reportIds.every((id) => selectedIds.has(id));
+      selectedIds.clear();
+      if (!allSelected) reportIds.forEach((id) => selectedIds.add(id));
+      renderAdminDashboard();
+      return;
+    }
+
+    if (actionName === "bulk-report") {
+      const selectedIds = [...selectedAdminReportIds()];
+      const reportAction = action.dataset.reportAction;
+      if (!selectedIds.length || !reportAction) return;
+
+      if (reportAction === "delete") {
+        const confirmed = await showConfirmModal({
+          title: "Delete selected messages?",
+          body: `This permanently deletes messages linked to ${selectedIds.length} selected report${selectedIds.length === 1 ? "" : "s"}.`,
+          confirmText: "Delete permanently",
+          danger: true,
+        });
+        if (!confirmed) return;
+      }
+
+      const note = await showInlinePrompt({
+        title: "Moderation note",
+        placeholder: "Reason or internal context (optional)",
+        confirmText: "Apply action",
+      });
+      if (note === null) return;
+
+      const resetLoading = setButtonLoading(action, true);
+      try {
+        const response = await api("/api/admin/reports", {
+          method: "PATCH",
+          body: {
+            token: state.session.token,
+            reportIds: selectedIds,
+            action: reportAction,
+            note,
+          },
+        });
+        selectedAdminReportIds().clear();
+        await refreshState();
+        await refreshAdminState();
+        render();
+        toast(`${response.count || selectedIds.length} report${selectedIds.length === 1 ? "" : "s"} updated.`);
+      } catch (error) {
+        handleApiError(error);
+      } finally {
+        resetLoading();
+      }
       return;
     }
 
@@ -11804,6 +12811,20 @@ async function handleAdminDashboardClick(event) {
         toast("Settings saved.");
       } catch (err) {
         toast(err.message);
+      } finally {
+        resetLoading();
+      }
+      return;
+    }
+
+    if (actionName === "refresh-audit") {
+      const resetLoading = setButtonLoading(action, true);
+      try {
+        const data = await api("/api/admin/audit-logs?limit=100", { method: "GET" });
+        state.admin.auditLogs = data.auditLogs || [];
+        render();
+      } catch (err) {
+        handleApiError(err);
       } finally {
         resetLoading();
       }
@@ -11949,6 +12970,49 @@ function renderUserRightPanel() {
   `;
 }
 
+function AdminReportActions(report) {
+  const reportId = escapeAttr(report.id);
+  const status = String(report.status || "open");
+  if (status === "deleted") return `<span class="muted">Deleted</span>`;
+  if (status === "hidden" || status === "dismissed") {
+    return `<div class="admin-row-actions"><button type="button" data-admin-action="restore" data-report-id="${reportId}">Restore</button><button class="danger" type="button" data-admin-action="delete" data-report-id="${reportId}">Delete</button></div>`;
+  }
+  return `<div class="admin-row-actions"><button type="button" data-admin-action="hide" data-report-id="${reportId}">Hide</button><button type="button" data-admin-action="dismiss" data-report-id="${reportId}">Dismiss</button></div>`;
+}
+
+function AdminAuditLogPage() {
+  const logs = state.admin.auditLogs || [];
+  const todayCount = logs.filter((log) => isSameDay(log.createdAt, Date.now())).length;
+  const destructiveCount = logs.filter((log) => /delete|suspend|hide/i.test(log.action || "")).length;
+
+  return `
+    <div class="admin-page-grid">
+      ${AdminMiniMetric("Recent Actions", logs.length, "Latest moderation history")}
+      ${AdminMiniMetric("Today", todayCount, "Actions recorded today")}
+      ${AdminMiniMetric("Safety Actions", destructiveCount, "Hide, suspend, and delete")}
+    </div>
+    <section class="admin-panel admin-wide-panel">
+      <div class="admin-panel-head">
+        <h2>Moderator Audit Trail</h2>
+        <div class="admin-page-actions">
+          <button class="admin-secondary-action" type="button" data-admin-dashboard-action="refresh-audit">Refresh</button>
+        </div>
+      </div>
+      ${AdminTable(
+        ["Action", "Target", "Moderator", "Note", "Time"],
+        logs.map((log) => [
+          `<strong>${escapeHtml(String(log.action || "admin action").replaceAll(":", " / "))}</strong>`,
+          `<span>${escapeHtml(log.targetType || "settings")}</span><small>${escapeHtml(log.targetId || "Platform")}</small>`,
+          `<span>${escapeHtml(log.adminName || "Admin")}</span>`,
+          `<span>${escapeHtml(log.meta?.note || log.meta?.reason || "No note")}</span>`,
+          `<span>${escapeHtml(relativeTime(log.createdAt || Date.now()))}</span>`,
+        ]),
+        "No audit events recorded yet."
+      )}
+    </section>
+  `;
+}
+
 function updateUserRightPanel() {
   if (isAdmin() || !elements.userInfoPanel) return;
   renderUserRightPanel();
@@ -11992,6 +13056,7 @@ function renderQuickFriendRow(entry = {}) {
 
 function closeQuickFriendsPanel() {
   elements.detailsPanel?.classList.remove("open");
+  elements.chatView?.classList.remove("friends-panel-open");
   elements.togglePanel?.setAttribute("aria-expanded", "false");
 }
 
@@ -12006,6 +13071,7 @@ function toggleQuickFriendsPanel(event) {
   }
 
   elements.detailsPanel.classList.add("open");
+  elements.chatView?.classList.add("friends-panel-open");
   elements.togglePanel?.setAttribute("aria-expanded", "true");
   renderUserRightPanel();
 
@@ -12086,7 +13152,10 @@ function renderProfilePanel() {
     return;
   }
 
+  if (profileDraftDirty && elements.profilePanel.querySelector("#profileForm")) return;
   pendingAvatarDataUrl = "";
+  pendingAvatarPublicId = "";
+  profileDraftDirty = false;
   elements.profilePanel.innerHTML = `
     <form class="profile-form" id="profileForm">
       <div class="profile-large">
@@ -12096,6 +13165,21 @@ function renderProfilePanel() {
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
         </button>
+        <div class="profile-photo-actions" aria-label="Profile photo actions">
+          <button class="profile-photo-action change" type="button" id="changeProfilePhotoButton">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
+              <circle cx="12" cy="13" r="3" />
+            </svg>
+            <span>${user.avatarDataUrl ? "Change photo" : "Add photo"}</span>
+          </button>
+          <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${user.avatarDataUrl ? "" : "disabled"}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
+            </svg>
+            <span>Remove</span>
+          </button>
+        </div>
         <h2>${escapeHtml(user.name)}</h2>
         <p class="muted">@${escapeHtml(user.username)} - ${escapeHtml(user.campus)}</p>
         <p class="muted">Your display name and photo appear on your chat messages.</p>
@@ -12357,6 +13441,7 @@ function openPanel(panel) {
 }
 
 async function handleProfilePanelChange(event) {
+  if (event.target.closest("#profileForm")) profileDraftDirty = true;
   if (event.target.id !== "profilePhotoInput") return;
   const file = event.target.files?.[0];
   if (!file) return;
@@ -12467,31 +13552,120 @@ function saveCroppedAvatar() {
   if (!cropState) return;
 
   pendingAvatarDataUrl = elements.avatarCropCanvas.toDataURL("image/png", 0.92);
-  const preview = activeProfileRoot()?.querySelector(".profile-photo-preview");
-
-  if (preview) {
-    const nextPreview = document.createElement("img");
-    nextPreview.className = preview.className;
-    nextPreview.src = pendingAvatarDataUrl;
-    nextPreview.alt = "Profile photo preview";
-    preview.replaceWith(nextPreview);
-  }
+  pendingAvatarPublicId = "";
+  profileDraftDirty = true;
+  updateProfilePhotoPreview(activeProfileRoot(), pendingAvatarDataUrl);
 
   closeAvatarCropper();
   toast("Photo cropped. Click Save profile to update it.");
 }
 
+function readProfileFormDraft(root) {
+  const user = state.session.user || {};
+  return {
+    fullName: root?.querySelector("#profileFullNameInput")?.value?.trim() ?? user.fullName ?? "",
+    anonymousName: root?.querySelector("#profilePublicNameInput")?.value?.trim() ?? user.name ?? "",
+    contactNumber: root?.querySelector("#profileContactInput")?.value?.trim() ?? user.contactNumber ?? "",
+    gender: root?.querySelector("#profileGenderSelect")?.value ?? user.gender ?? "",
+    department: root?.querySelector("#profileDepartmentInput")?.value?.trim() ?? user.department ?? "",
+    studyYear: root?.querySelector("#profileStudyYearSelect")?.value ?? user.studyYear ?? "",
+    about: root?.querySelector("#profileAboutInput")?.value?.trim() ?? user.about ?? "",
+    customStatus: root?.querySelector("#profileStatusInput")?.value?.trim() ?? user.customStatus ?? "",
+    lastSeen: root?.querySelector("#profileLastSeenSelect")?.value || user.privacySettings?.lastSeen || "everyone",
+    onlineVisibility:
+      root?.querySelector("#profileOnlineVisibilitySelect")?.value ||
+      user.privacySettings?.onlineVisibility ||
+      "everyone",
+  };
+}
+
+function updateProfilePhotoPreview(root, dataUrl = "") {
+  const preview = root?.querySelector(".profile-photo-preview");
+  if (!preview) return;
+
+  const user = state.session.user || {};
+  let nextPreview;
+  if (dataUrl) {
+    nextPreview = document.createElement("img");
+    nextPreview.src = dataUrl;
+    nextPreview.alt = `${user.name || "User"} profile photo`;
+  } else {
+    nextPreview = document.createElement("span");
+    nextPreview.textContent = initials(user.name || "User");
+    nextPreview.style.background = user.avatarColor || avatarColor(user.name || "User");
+  }
+
+  nextPreview.className = preview.className;
+  preview.replaceWith(nextPreview);
+  const changeText = root.querySelector(".change-photo-text");
+  if (changeText) changeText.textContent = dataUrl ? "Change photo" : "Add your photo";
+  const changeActionText = root.querySelector("#changeProfilePhotoButton span");
+  if (changeActionText) changeActionText.textContent = dataUrl ? "Change photo" : "Add photo";
+  const removeButton = root.querySelector("#removeProfilePhotoButton");
+  if (removeButton) removeButton.disabled = !dataUrl;
+}
+
+async function removeProfilePhoto(button) {
+  const root = button.closest("#profileForm") || activeProfileRoot();
+  const currentPhoto = state.session.user?.avatarDataUrl || "";
+  if (!currentPhoto && !pendingAvatarDataUrl) return;
+  if (!window.confirm("Remove your profile photo?")) return;
+
+  const originalMarkup = button.innerHTML;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+
+  try {
+    if (currentPhoto) {
+      await api("/api/upload/avatar", {
+        method: "DELETE",
+        body: {
+          token: state.session.token,
+          avatarPublicId: state.session.user.avatarPublicId || "",
+        },
+      });
+    }
+
+    state.session.user = {
+      ...state.session.user,
+      avatarDataUrl: "",
+      avatarPublicId: "",
+    };
+    saveSession(state.session);
+    pendingAvatarDataUrl = "";
+    pendingAvatarPublicId = "";
+    profileDraftDirty = true;
+    updateProfilePhotoPreview(root, "");
+    renderSidebarAvatar(state.session.user);
+    toast("Profile photo removed.");
+  } catch (error) {
+    handleApiError(error);
+  } finally {
+    button.removeAttribute("aria-busy");
+    button.innerHTML = originalMarkup;
+    button.disabled = !(state.session.user?.avatarDataUrl || pendingAvatarDataUrl);
+  }
+}
+
 async function handleProfilePanelClick(event) {
-  const photoButton = event.target.closest("#profilePhotoButton");
+  const photoButton = event.target.closest("#profilePhotoButton, #changeProfilePhotoButton");
   if (photoButton) {
     const input = activeProfileRoot()?.querySelector("#profilePhotoInput");
     input?.click();
     return;
   }
 
+  const removePhotoButton = event.target.closest("#removeProfilePhotoButton");
+  if (removePhotoButton) {
+    await removeProfilePhoto(removePhotoButton);
+    return;
+  }
+
   const saveButton = event.target.closest("#saveProfileButton");
   if (!saveButton) return;
 
+  const profileRoot = saveButton.closest("#profileForm") || activeProfileRoot();
+  const profileDraft = readProfileFormDraft(profileRoot);
   const resetLoading = setButtonLoading(saveButton, true);
   try {
     if (pendingAvatarDataUrl) {
@@ -12504,6 +13678,7 @@ async function handleProfilePanelClick(event) {
           },
         });
         pendingAvatarDataUrl = uploadRes.url;
+        pendingAvatarPublicId = uploadRes.publicId || "";
       } catch (err) {
         console.warn("Avatar upload failed:", err);
       }
@@ -12514,19 +13689,13 @@ async function handleProfilePanelClick(event) {
       body: {
         token: state.session.token,
         profile: {
-          fullName: activeProfileRoot()?.querySelector("#profileFullNameInput")?.value?.trim(),
-          anonymousName: activeProfileRoot()?.querySelector("#profilePublicNameInput")?.value?.trim(),
-          contactNumber: activeProfileRoot()?.querySelector("#profileContactInput")?.value?.trim(),
-          gender: activeProfileRoot()?.querySelector("#profileGenderSelect")?.value,
-          department: activeProfileRoot()?.querySelector("#profileDepartmentInput")?.value?.trim(),
-          studyYear: activeProfileRoot()?.querySelector("#profileStudyYearSelect")?.value,
-          about: activeProfileRoot()?.querySelector("#profileAboutInput")?.value?.trim(),
-          customStatus: activeProfileRoot()?.querySelector("#profileStatusInput")?.value?.trim(),
+          ...profileDraft,
           avatarDataUrl: pendingAvatarDataUrl || state.session.user.avatarDataUrl || "",
+          avatarPublicId: pendingAvatarPublicId || state.session.user.avatarPublicId || "",
           privacySettings: {
             ...(state.session.user.privacySettings || {}),
-            lastSeen: activeProfileRoot()?.querySelector("#profileLastSeenSelect")?.value || state.session.user.privacySettings?.lastSeen || "everyone",
-            onlineVisibility: activeProfileRoot()?.querySelector("#profileOnlineVisibilitySelect")?.value || state.session.user.privacySettings?.onlineVisibility || "everyone",
+            lastSeen: profileDraft.lastSeen,
+            onlineVisibility: profileDraft.onlineVisibility,
           },
           themePreference: loadUserSettings().theme,
         },
@@ -12536,6 +13705,8 @@ async function handleProfilePanelClick(event) {
     state.session.user = { ...state.session.user, ...user };
     saveSession(state.session);
     pendingAvatarDataUrl = "";
+    pendingAvatarPublicId = "";
+    profileDraftDirty = false;
     await refreshState();
     render();
     toast("Profile updated!");
@@ -12569,8 +13740,19 @@ async function handleAdminPanelClick(event) {
       toast("User account deleted.");
     } else if (action.dataset.adminAction === "suspend-user" || action.dataset.adminAction === "reactivate-user") {
       const suspending = action.dataset.adminAction === "suspend-user";
-      const reason = suspending ? window.prompt("Suspension reason", "Community safety") : "";
+      const reason = suspending
+        ? await showInlinePrompt({
+            title: "Suspend user",
+            placeholder: "Add a clear moderation reason",
+            value: "Community safety",
+            confirmText: "Suspend",
+          })
+        : "";
       if (suspending && reason === null) return;
+      if (suspending && reason.trim().length < 3) {
+        toast("Add a clear suspension reason.");
+        return;
+      }
 
       await api(`/api/admin/users/${action.dataset.userId}/status`, {
         method: "PATCH",
@@ -12602,14 +13784,26 @@ async function handleAdminPanelClick(event) {
     } else {
       const adminAction = action.dataset.adminAction;
       if (adminAction === "delete") {
-        const confirmed = window.confirm("Delete this hidden message permanently?");
+        const confirmed = await showConfirmModal({
+          title: "Delete hidden message?",
+          body: "This permanently deletes the message linked to this report.",
+          confirmText: "Delete permanently",
+          danger: true,
+        });
         if (!confirmed) return;
       }
+      const note = await showInlinePrompt({
+        title: "Moderation note",
+        placeholder: "Reason or internal context (optional)",
+        confirmText: "Apply action",
+      });
+      if (note === null) return;
       await api(`/api/admin/reports/${action.dataset.reportId}`, {
         method: "PATCH",
         body: {
           token: state.session.token,
           action: adminAction,
+          note,
         },
       });
       toast(adminAction === "hide" ? "Message hidden." : "Admin action saved.");
@@ -12774,6 +13968,7 @@ function isSessionExpiredError(error) {
 
 function handleApiError(error) {
   if (isSessionExpiredError(error)) {
+    clearCurrentUserOutbox();
     localStorage.removeItem(SESSION_KEY);
     state.session = null;
     if (socket) {

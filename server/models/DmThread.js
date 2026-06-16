@@ -55,6 +55,18 @@ const dmThreadSchema = new mongoose.Schema({
     type: String,
     trim: true
   }],
+  pinnedForUserIds: [{
+    type: String,
+    trim: true
+  }],
+  mutedForUserIds: [{
+    type: String,
+    trim: true
+  }],
+  archivedForUserIds: [{
+    type: String,
+    trim: true
+  }],
   unreadByUserId: {
     type: Map,
     of: Number,

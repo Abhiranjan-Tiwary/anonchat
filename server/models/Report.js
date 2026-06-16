@@ -64,8 +64,33 @@ const reportSchema = new mongoose.Schema({
   },
   adminNote: {
     type: String,
+    maxlength: 300,
     default: ''
   },
+  actionHistory: [{
+    action: {
+      type: String,
+      enum: ['hide', 'dismiss', 'resolve', 'restore', 'delete'],
+      required: true
+    },
+    note: {
+      type: String,
+      maxlength: 300,
+      default: ''
+    },
+    adminPublicId: {
+      type: String,
+      default: ''
+    },
+    adminName: {
+      type: String,
+      default: 'Admin'
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
 
   // Public id mirrors for the current API/client routes.
   messagePublicId: {

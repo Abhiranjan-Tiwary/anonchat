@@ -1,13 +1,13 @@
-const CACHE_NAME = "anonchat-shell-v21-call-media";
+const CACHE_NAME = "anonchat-shell-v25-phase67";
 const SHELL_ASSETS = [
   "/",
   "/offline.html",
   "/manifest.webmanifest",
-  "/css/styles.css?v=call-media-20260612",
+  "/css/styles.css?v=phase67b-20260616",
   "/css/landing-nav-fix.css?v=home-cleanup-20260605",
   "/css/auth-page-fix.css?v=home-cleanup-20260605",
   "/css/user-chat-room-fix.css?v=home-cleanup-20260605",
-  "/js/app.js?v=call-media-20260612",
+  "/js/app.js?v=phase67b-20260616",
   "/assets/logo/logo.png",
   "/assets/anonchat-preview.png"
 ];
@@ -100,18 +100,36 @@ self.addEventListener("notificationclick", (event) => {
   const targetUrl = event.notification.data?.url || "/";
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      const existing = clients.find((client) => new URL(client.url).origin === self.location.origin);
+      const existing = clients.find((client) =>
+        new URL(client.url).origin === self.location.origin && client.visibilityState === "visible"
+      ) || clients.find((client) => new URL(client.url).origin === self.location.origin);
       if (existing) {
-        existing.focus();
-        existing.postMessage({
+        const message = {
           type: "anonchat:notification-click",
           url: targetUrl,
           roomId: event.notification.data?.roomId || "",
           dmThreadId: event.notification.data?.dmThreadId || "",
-        });
-        return;
+        };
+        existing.postMessage(message);
+        if (typeof existing.navigate === "function") {
+          return existing.navigate(targetUrl)
+            .then((navigated) => {
+              navigated?.postMessage(message);
+              return navigated?.focus();
+            })
+            .catch(() => existing.focus());
+        }
+        return existing.focus();
       }
       return self.clients.openWindow(targetUrl);
+    })
+  );
+});
+
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      clients.forEach((client) => client.postMessage({ type: "anonchat:push-subscription-change" }));
     })
   );
 });
