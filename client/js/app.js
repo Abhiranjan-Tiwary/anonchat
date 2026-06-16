@@ -646,6 +646,7 @@ function cacheElements() {
   elements.audioCallFromProfile = document.querySelector("#audioCallFromProfile");
   elements.videoCallFromProfile = document.querySelector("#videoCallFromProfile");
   elements.callLayer = document.querySelector("#callLayer");
+  elements.incomingCallBackdrop = document.querySelector("#incomingCallBackdrop");
   elements.incomingCallCard = document.querySelector("#incomingCallCard");
   elements.incomingCallAvatar = document.querySelector("#incomingCallAvatar");
   elements.incomingCallName = document.querySelector("#incomingCallName");
@@ -3935,6 +3936,7 @@ function showIncomingCall(payload) {
   elements.incomingCallCard?.classList.remove("hidden");
   elements.callScreen?.classList.add("hidden");
   renderCallAvatar(elements.incomingCallAvatar, peer);
+  renderIncomingCallBackdrop(peer);
   if (elements.incomingCallName) elements.incomingCallName.textContent = peer.name;
   if (elements.incomingCallType) elements.incomingCallType.textContent = `Incoming ${callState.type} call`;
   callState.timeoutTimer = window.setTimeout(() => {
@@ -4154,6 +4156,7 @@ function cleanupCall() {
     elements.remoteAudio.srcObject = null;
   }
   elements.incomingCallCard?.classList.add("hidden");
+  clearIncomingCallBackdrop();
   elements.callScreen?.classList.add("hidden");
   elements.callMoreMenu?.classList.add("hidden");
   if (elements.callReactionOverlay) elements.callReactionOverlay.innerHTML = "";
@@ -4324,6 +4327,29 @@ function renderCallAvatar(element, peer = {}) {
   }
   element.style.background = peer.avatarColor || "#6c63ff";
   element.textContent = (peer.name || "A").slice(0, 1).toUpperCase();
+}
+
+function cssImageUrl(value = "") {
+  return String(value || "")
+    .replace(/[\n\r]/g, "")
+    .replace(/["\\]/g, "\\$&");
+}
+
+function renderIncomingCallBackdrop(peer = {}) {
+  if (!elements.incomingCallBackdrop) return;
+  const accent = peer.avatarColor || "#6c63ff";
+  if (peer.avatarDataUrl) {
+    elements.incomingCallBackdrop.style.backgroundImage =
+      `linear-gradient(180deg, rgba(2, 6, 23, 0.08) 0%, rgba(2, 6, 23, 0.5) 52%, rgba(2, 6, 23, 0.96) 100%), url("${cssImageUrl(peer.avatarDataUrl)}")`;
+    return;
+  }
+  elements.incomingCallBackdrop.style.backgroundImage =
+    `radial-gradient(circle at 50% 22%, ${accent}66 0%, ${accent}18 28%, transparent 58%), linear-gradient(180deg, #070816 0%, #020617 100%)`;
+}
+
+function clearIncomingCallBackdrop() {
+  if (!elements.incomingCallBackdrop) return;
+  elements.incomingCallBackdrop.style.backgroundImage = "";
 }
 
 function startCallDurationTimer() {
@@ -7863,20 +7889,20 @@ function profileFormMarkup(user) {
   return `
     <form class="profile-form profile-page-form" id="profileForm">
       <div class="profile-large">
-        <button class="profile-photo-button" type="button" id="profilePhotoButton" aria-label="Change profile photo">
+        <label class="profile-photo-button" id="profilePhotoButton" for="profilePhotoInput" role="button" tabindex="0" aria-label="Change profile photo">
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
-        </button>
+        </label>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <button class="profile-photo-action change" type="button" id="changeProfilePhotoButton">
+          <label class="profile-photo-action change" id="changeProfilePhotoButton" for="profilePhotoInput" role="button" tabindex="0">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
             </svg>
             <span>${hasPhoto ? "Change photo" : "Add photo"}</span>
-          </button>
+          </label>
           <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${hasPhoto ? "" : "disabled"}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
@@ -13159,20 +13185,20 @@ function renderProfilePanel() {
   elements.profilePanel.innerHTML = `
     <form class="profile-form" id="profileForm">
       <div class="profile-large">
-        <button class="profile-photo-button" type="button" id="profilePhotoButton" aria-label="Change profile photo">
+        <label class="profile-photo-button" id="profilePhotoButton" for="profilePhotoInput" role="button" tabindex="0" aria-label="Change profile photo">
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
-        </button>
+        </label>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <button class="profile-photo-action change" type="button" id="changeProfilePhotoButton">
+          <label class="profile-photo-action change" id="changeProfilePhotoButton" for="profilePhotoInput" role="button" tabindex="0">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
             </svg>
             <span>${user.avatarDataUrl ? "Change photo" : "Add photo"}</span>
-          </button>
+          </label>
           <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${user.avatarDataUrl ? "" : "disabled"}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />

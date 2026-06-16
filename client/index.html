@@ -35,12 +35,12 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/css/styles.css?v=phase67b-20260616" />
+    <link rel="stylesheet" href="/css/styles.css?v=incoming-call-20260616" />
     <link rel="stylesheet" href="/css/landing-nav-fix.css?v=home-cleanup-20260605" />
     <link rel="stylesheet" href="/css/auth-page-fix.css?v=home-cleanup-20260605" />
     <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=home-cleanup-20260605" />
     <script src="/socket.io/socket.io.js" async data-socket-client-loader onerror="this.dataset.failed='true'"></script>
-<script src="/js/app.js?v=phase67b-20260616" defer></script>
+<script src="/js/app.js?v=incoming-call-20260616" defer></script>
   </head>
   <body>
     <div id="sidebarOverlay"></div>
@@ -927,13 +927,26 @@
     </div>
 
     <div id="callLayer" class="call-layer hidden" aria-live="polite">
+      <div class="incoming-call-backdrop" id="incomingCallBackdrop" aria-hidden="true"></div>
       <div class="incoming-call-card hidden" id="incomingCallCard">
-        <div class="call-avatar" id="incomingCallAvatar">A</div>
-        <strong id="incomingCallName">Anonymous User</strong>
-        <span id="incomingCallType">Incoming call</span>
+        <div class="incoming-call-hero">
+          <div class="call-avatar incoming-call-avatar" id="incomingCallAvatar">A</div>
+        </div>
+        <div class="incoming-call-copy">
+          <strong id="incomingCallName">Anonymous User</strong>
+          <span id="incomingCallType">Incoming call</span>
+        </div>
         <div class="incoming-call-actions">
-          <button class="call-control reject" type="button" id="rejectCallButton">Decline</button>
-          <button class="call-control accept" type="button" id="acceptCallButton">Accept</button>
+          <button class="call-control reject incoming-call-button" type="button" id="rejectCallButton" aria-label="Decline call" title="Decline call">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5.2 15.5c4.5-3.4 9.1-3.4 13.6 0l-2.2 3-3-1.5v-2.2h-3.2V17l-3 1.5-2.2-3Z" />
+            </svg>
+          </button>
+          <button class="call-control accept incoming-call-button" type="button" id="acceptCallButton" aria-label="Accept call" title="Accept call">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6.6 10.8c2.3 4.5 5.9 6.5 10.8 6l1.6-3.2-3.4-1.8-1.5 1.7c-1.7-.6-3-1.8-3.7-3.5l1.7-1.6-1.8-3.4-3.3 1.5-.4 4.3Z" />
+            </svg>
+          </button>
         </div>
       </div>
 

@@ -209,6 +209,7 @@ const rateLimiters = {
   report: createRateLimiter({ windowMs: 10 * 60 * 1000, max: 5, keyPrefix: "report" }),
   reset: createRateLimiter({ windowMs: 15 * 60 * 1000, max: 3, keyPrefix: "reset" }),
   upload: createRateLimiter({ windowMs: 10 * 60 * 1000, max: 30, keyPrefix: "upload" }),
+  profile: createRateLimiter({ windowMs: 10 * 60 * 1000, max: 80, keyPrefix: "profile" }),
   account: createRateLimiter({ windowMs: 10 * 60 * 1000, max: 20, keyPrefix: "account" }),
   admin: createRateLimiter({
     windowMs: 60 * 1000,
@@ -1131,7 +1132,7 @@ app.post("/api/auth/password-reset/confirm", rateLimiters.reset, async (req, res
   }
 });
 
-app.patch("/api/users/profile", rateLimiters.account, async (req, res) => {
+app.patch("/api/users/profile", rateLimiters.profile, async (req, res) => {
   try {
     const user = await requireUser(requestToken(req));
     const updated = await updateProfile(user, req.body.profile || {});
