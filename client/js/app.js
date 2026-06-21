@@ -7974,20 +7974,22 @@ function profileFormMarkup(user) {
   return `
     <form class="profile-form profile-page-form" id="profileForm">
       <div class="profile-large">
-        <button class="profile-photo-button" id="profilePhotoButton" type="button" aria-label="Change profile photo">
+        <label class="profile-photo-button" id="profilePhotoButton" aria-label="Change profile photo">
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
-        </button>
+          <input class="profile-photo-native-input" data-profile-photo-input type="file" accept="image/*" />
+        </label>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <button class="profile-photo-action change" id="changeProfilePhotoButton" type="button">
+          <label class="profile-photo-action change" id="changeProfilePhotoButton">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
             </svg>
             <span>${hasPhoto ? "Change photo" : "Add photo"}</span>
-          </button>
+            <input class="profile-photo-native-input" data-profile-photo-input type="file" accept="image/*" />
+          </label>
           <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${hasPhoto ? "" : "disabled"}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
@@ -7998,7 +8000,6 @@ function profileFormMarkup(user) {
         <h2>${escapeHtml(user.name)}</h2>
         <p class="muted">@${escapeHtml(user.username)} - ${escapeHtml(user.campus)}</p>
       </div>
-      <input class="visually-hidden" id="profilePhotoInput" type="file" accept="image/*" />
       <label for="profilePublicNameInput">Chat display name</label>
       <input id="profilePublicNameInput" value="${escapeAttr(user.name || "")}" maxlength="40" placeholder="Name shown in chat" />
       <label for="profileAboutInput">Bio</label>
@@ -13368,20 +13369,22 @@ function renderProfilePanel() {
   elements.profilePanel.innerHTML = `
     <form class="profile-form" id="profileForm">
       <div class="profile-large">
-        <button class="profile-photo-button" id="profilePhotoButton" type="button" aria-label="Change profile photo">
+        <label class="profile-photo-button" id="profilePhotoButton" aria-label="Change profile photo">
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
-        </button>
+          <input class="profile-photo-native-input" data-profile-photo-input type="file" accept="image/*" />
+        </label>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <button class="profile-photo-action change" id="changeProfilePhotoButton" type="button">
+          <label class="profile-photo-action change" id="changeProfilePhotoButton">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
             </svg>
             <span>${user.avatarDataUrl ? "Change photo" : "Add photo"}</span>
-          </button>
+            <input class="profile-photo-native-input" data-profile-photo-input type="file" accept="image/*" />
+          </label>
           <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${user.avatarDataUrl ? "" : "disabled"}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
@@ -13393,7 +13396,6 @@ function renderProfilePanel() {
         <p class="muted">@${escapeHtml(user.username)} - ${escapeHtml(user.campus)}</p>
         <p class="muted">Your display name and photo appear on your chat messages.</p>
       </div>
-      <input class="visually-hidden" id="profilePhotoInput" type="file" accept="image/*" />
       <label for="profileFullNameInput">Account name</label>
       <input id="profileFullNameInput" value="${escapeAttr(user.fullName || "")}" maxlength="60" />
       <label for="profilePublicNameInput">Chat display name</label>
@@ -13651,9 +13653,10 @@ function openPanel(panel) {
 
 async function handleProfilePanelChange(event) {
   if (event.target.closest("#profileForm")) profileDraftDirty = true;
-  if (event.target.id !== "profilePhotoInput") return;
-  await processProfilePhotoFile(event.target.files?.[0]);
-  event.target.value = "";
+  const photoInput = event.target.closest("[data-profile-photo-input]");
+  if (!photoInput) return;
+  await processProfilePhotoFile(photoInput.files?.[0]);
+  photoInput.value = "";
 }
 
 async function processProfilePhotoFile(file) {
@@ -13667,7 +13670,7 @@ async function processProfilePhotoFile(file) {
 }
 
 function openProfilePhotoPicker(root = activeProfileRoot()) {
-  const input = root?.querySelector("#profilePhotoInput") || document.querySelector("#profilePhotoInput");
+  const input = root?.querySelector("[data-profile-photo-input]") || document.querySelector("[data-profile-photo-input]");
   if (input) {
     input.value = "";
     input.click();
@@ -13882,9 +13885,7 @@ async function removeProfilePhoto(button) {
 async function handleProfilePanelClick(event) {
   const photoButton = event.target.closest("#profilePhotoButton, #changeProfilePhotoButton");
   if (photoButton) {
-    event.preventDefault();
-    event.stopPropagation();
-    openProfilePhotoPicker(photoButton.closest("#profileForm") || activeProfileRoot());
+    profileDraftDirty = true;
     return;
   }
 
