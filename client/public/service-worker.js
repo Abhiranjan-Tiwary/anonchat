@@ -1,13 +1,13 @@
-const CACHE_NAME = "anonchat-shell-v27-incoming-call";
+const CACHE_NAME = "anonchat-shell-v29-chat-fixes";
 const SHELL_ASSETS = [
   "/",
   "/offline.html",
   "/manifest.webmanifest",
-  "/css/styles.css?v=incoming-call-20260616",
+  "/css/styles.css?v=chat-fixes-20260621",
   "/css/landing-nav-fix.css?v=home-cleanup-20260605",
   "/css/auth-page-fix.css?v=home-cleanup-20260605",
   "/css/user-chat-room-fix.css?v=home-cleanup-20260605",
-  "/js/app.js?v=incoming-call-20260616",
+  "/js/app.js?v=chat-fixes-20260621",
   "/assets/logo/logo.png",
   "/assets/anonchat-preview.png"
 ];

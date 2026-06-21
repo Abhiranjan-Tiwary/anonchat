@@ -65,6 +65,7 @@ export const backfillRoomSlugs = async () => {
 
 export const dropLegacyIndexes = async () => {
   await dropIndexIfExists(Room.db.collection('users'), 'contactNumber_1')
+  await dropIndexIfExists(Message.db.collection('messages'), 'expiresAt_1')
   await dropClientTempIdLegacyIndexes()
 }
 

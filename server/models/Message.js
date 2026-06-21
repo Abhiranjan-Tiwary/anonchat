@@ -186,10 +186,6 @@ const messageSchema = new mongoose.Schema({
   moderationReasons: {
     type: [String],
     default: []
-  },
-  expiresAt: {
-    type: Date,
-    default: () => new Date(Date.now() + 24 * 60 * 60 * 1000)
   }
 }, { timestamps: true, id: false })
 
@@ -199,7 +195,6 @@ messageSchema.index({ authorId: 1 })
 messageSchema.index({ authorId: 1, createdAt: -1 })
 messageSchema.index({ clientTempId: 1 }, { sparse: true, name: 'clientTempId_sparse_idx' })
 messageSchema.index({ hidden: 1 })
-messageSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 })
 messageSchema.index({ roomId: 1, hidden: 1, createdAt: 1 })
 messageSchema.index({ reported: 1, hidden: 1, createdAt: -1 })
 messageSchema.index({ type: 1 })

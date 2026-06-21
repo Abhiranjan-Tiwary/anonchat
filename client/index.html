@@ -35,12 +35,12 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/css/styles.css?v=incoming-call-20260616" />
+    <link rel="stylesheet" href="/css/styles.css?v=chat-fixes-20260621" />
     <link rel="stylesheet" href="/css/landing-nav-fix.css?v=home-cleanup-20260605" />
     <link rel="stylesheet" href="/css/auth-page-fix.css?v=home-cleanup-20260605" />
     <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=home-cleanup-20260605" />
     <script src="/socket.io/socket.io.js" async data-socket-client-loader onerror="this.dataset.failed='true'"></script>
-<script src="/js/app.js?v=incoming-call-20260616" defer></script>
+<script src="/js/app.js?v=chat-fixes-20260621" defer></script>
   </head>
   <body>
     <div id="sidebarOverlay"></div>
@@ -985,7 +985,15 @@
               <path d="m16 10 5-3v10l-5-3" />
             </svg>
           </button>
-          <button class="call-control" type="button" id="speakerCallButton" aria-label="Turn speaker off" aria-pressed="false" title="Speaker off">
+          <button class="call-control" type="button" id="switchCameraButton" aria-label="Switch camera" aria-pressed="false" title="Switch camera">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 7h7a4 4 0 0 1 4 4v1" />
+              <path d="m15 9 3-3 3 3" />
+              <path d="M17 17h-7a4 4 0 0 1-4-4v-1" />
+              <path d="m9 15-3 3-3-3" />
+            </svg>
+          </button>
+          <button class="call-control" type="button" id="speakerCallButton" aria-label="Turn speaker on" aria-pressed="false" title="Speaker off">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M5 9v6h4l5 4V5L9 9H5Z" />
               <path d="M17 9a4 4 0 0 1 0 6M19.5 6.5a8 8 0 0 1 0 11" />
