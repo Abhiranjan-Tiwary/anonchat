@@ -813,7 +813,7 @@ window.addEventListener("beforeunload", () => {
   elements.closeAvatarCropModal.addEventListener("click", closeAvatarCropper);
   elements.cancelAvatarCropButton.addEventListener("click", closeAvatarCropper);
   elements.saveAvatarCropButton.addEventListener("click", saveCroppedAvatar);
-  elements.globalProfilePhotoInput?.addEventListener("change", handleGlobalProfilePhotoChange);
+  document.addEventListener("change", handleProfilePhotoInputChange, true);
   document.addEventListener("click", handleProfilePhotoTriggerCapture, true);
   document.addEventListener("keydown", handleProfilePhotoTriggerKeydown, true);
   elements.closePasswordResetModal.addEventListener("click", closePasswordResetModal);
@@ -8086,23 +8086,22 @@ function profileFormMarkup(user) {
   const hasPhoto = Boolean(user.avatarDataUrl || pendingAvatarDataUrl);
   return `
     <form class="profile-form profile-page-form" id="profileForm">
+      ${profilePhotoNativeInputMarkup()}
       <div class="profile-large">
-        <label class="profile-photo-button" id="profilePhotoButton" data-profile-photo-trigger role="button" tabindex="0" aria-label="Change profile photo">
-          ${profilePhotoNativeInputMarkup()}
+        <button class="profile-photo-button" id="profilePhotoButton" type="button" data-profile-photo-trigger aria-label="Change profile photo">
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
-        </label>
+        </button>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <label class="profile-photo-action change" id="changeProfilePhotoButton" data-profile-photo-trigger role="button" tabindex="0">
-            ${profilePhotoNativeInputMarkup()}
+          <button class="profile-photo-action change" id="changeProfilePhotoButton" type="button" data-profile-photo-trigger>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
             </svg>
             <span>${hasPhoto ? "Change photo" : "Add photo"}</span>
-          </label>
+          </button>
           <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${hasPhoto ? "" : "disabled"}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
@@ -11242,6 +11241,7 @@ function profilePhotoNativeInputMarkup() {
       type="file"
       accept="image/jpeg,image/png,image/webp,image/gif"
       data-profile-photo-input
+      tabindex="-1"
       aria-label="Choose profile photo"
     />
   `;
@@ -13610,23 +13610,22 @@ function renderProfilePanel() {
   profileDraftDirty = false;
   elements.profilePanel.innerHTML = `
     <form class="profile-form" id="profileForm">
+      ${profilePhotoNativeInputMarkup()}
       <div class="profile-large">
-        <label class="profile-photo-button" id="profilePhotoButton" data-profile-photo-trigger role="button" tabindex="0" aria-label="Change profile photo">
-          ${profilePhotoNativeInputMarkup()}
+        <button class="profile-photo-button" id="profilePhotoButton" type="button" data-profile-photo-trigger aria-label="Change profile photo">
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
-        </label>
+        </button>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <label class="profile-photo-action change" id="changeProfilePhotoButton" data-profile-photo-trigger role="button" tabindex="0">
-            ${profilePhotoNativeInputMarkup()}
+          <button class="profile-photo-action change" id="changeProfilePhotoButton" type="button" data-profile-photo-trigger>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
             </svg>
             <span>${user.avatarDataUrl ? "Change photo" : "Add photo"}</span>
-          </label>
+          </button>
           <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${user.avatarDataUrl ? "" : "disabled"}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
@@ -13896,24 +13895,35 @@ function openPanel(panel) {
 async function handleProfilePanelChange(event) {
   if (event.target.closest("#profileForm")) profileDraftDirty = true;
   const photoInput = event.target.closest("[data-profile-photo-input]");
-  if (!photoInput) return;
-  await processProfilePhotoFile(photoInput.files?.[0]);
-  photoInput.value = "";
+  if (photoInput) {
+    console.log("[profile-photo] delegated form change ignored; document handler owns upload flow");
+  }
 }
 
 async function processProfilePhotoFile(file) {
-  if (!file) return;
+  if (!file) {
+    console.log("[profile-photo] no file selected");
+    return;
+  }
+  console.log("[profile-photo] validating selected file", {
+    name: file.name,
+    type: file.type,
+    size: file.size,
+  });
   if (!PROFILE_PHOTO_ALLOWED_TYPES.has(file.type)) {
     toast("Please select a valid image (JPG, PNG, WEBP, or GIF).");
+    console.warn("[profile-photo] rejected invalid image type", file.type);
     return;
   }
 
   if (file.size > PROFILE_PHOTO_MAX_BYTES) {
     toast("Image must be under 5MB.");
+    console.warn("[profile-photo] rejected oversized image", file.size);
     return;
   }
 
   try {
+    console.log("[profile-photo] reading image file as data URL");
     openAvatarCropper(await fileToDataUrl(file));
   } catch (error) {
     console.warn("Could not read profile photo:", error);
@@ -13938,36 +13948,35 @@ function profilePhotoTriggerMatch(target) {
 
 function openGlobalProfilePhotoPicker(form) {
   activeProfilePhotoForm = form || activeProfileRoot();
-  const input = elements.globalProfilePhotoInput || document.querySelector("#globalProfilePhotoInput");
+  const input =
+    activeProfilePhotoForm?.querySelector("[data-profile-photo-input]") ||
+    elements.globalProfilePhotoInput ||
+    document.querySelector("#globalProfilePhotoInput");
   if (!input) {
+    console.log("[profile-photo] no existing file input found, creating fallback input");
     openProfilePhotoPicker(activeProfilePhotoForm);
     return;
   }
 
+  console.log("[profile-photo] opening file picker", {
+    inputId: input.id || "",
+    inProfileForm: Boolean(input.closest("#profileForm")),
+    disabled: Boolean(input.disabled),
+  });
   input.value = "";
   input.click();
 }
 
 function handleProfilePhotoTriggerCapture(event) {
-  const nativeInput = event.target.closest?.("[data-profile-photo-input]");
-  if (nativeInput) {
-    activeProfilePhotoForm = nativeInput.closest("#profileForm") || activeProfileRoot();
-    profileDraftDirty = true;
-    return;
-  }
-
   const match = profilePhotoTriggerMatch(event.target);
   if (!match) return;
 
-  const inlineInput = match.trigger.querySelector?.("[data-profile-photo-input]");
-  if (inlineInput) {
-    activeProfilePhotoForm = match.form;
-    profileDraftDirty = true;
-    return;
-  }
-
   event.preventDefault();
   event.stopPropagation();
+  console.log("[profile-photo] change photo trigger clicked", {
+    triggerId: match.trigger.id || "",
+    hasFileInput: Boolean(match.form?.querySelector("[data-profile-photo-input]")),
+  });
   profileDraftDirty = true;
   openGlobalProfilePhotoPicker(match.form);
 }
@@ -13980,8 +13989,30 @@ function handleProfilePhotoTriggerKeydown(event) {
 
   event.preventDefault();
   event.stopPropagation();
+  console.log("[profile-photo] keyboard trigger", {
+    key: event.key,
+    triggerId: match.trigger.id || "",
+  });
   profileDraftDirty = true;
   openGlobalProfilePhotoPicker(match.form);
+}
+
+async function handleProfilePhotoInputChange(event) {
+  const input = event.target;
+  const photoInput = input?.matches?.("[data-profile-photo-input], #globalProfilePhotoInput") ? input : null;
+  if (!photoInput) return;
+
+  event.stopPropagation();
+  activeProfilePhotoForm = photoInput.closest("#profileForm") || activeProfilePhotoForm || activeProfileRoot();
+  console.log("[profile-photo] file input change fired", {
+    inputId: photoInput.id || "",
+    fileCount: photoInput.files?.length || 0,
+    fileName: photoInput.files?.[0]?.name || "",
+    fileType: photoInput.files?.[0]?.type || "",
+    fileSize: photoInput.files?.[0]?.size || 0,
+  });
+  await processProfilePhotoFile(photoInput.files?.[0]);
+  photoInput.value = "";
 }
 
 async function handleGlobalProfilePhotoChange(event) {
@@ -13993,14 +14024,16 @@ async function handleGlobalProfilePhotoChange(event) {
 function openProfilePhotoPicker(root = activeProfileRoot()) {
   const input = root?.querySelector("[data-profile-photo-input]") || document.querySelector("[data-profile-photo-input]");
   if (input) {
+    console.log("[profile-photo] opening existing form input fallback");
     input.value = "";
     input.click();
     return;
   }
 
+  console.log("[profile-photo] opening dynamically-created fallback input");
   const fallbackInput = document.createElement("input");
   fallbackInput.type = "file";
-  fallbackInput.accept = "image/*";
+  fallbackInput.accept = "image/jpeg,image/png,image/webp,image/gif";
   fallbackInput.className = "visually-hidden";
   fallbackInput.addEventListener("change", async () => {
     await processProfilePhotoFile(fallbackInput.files?.[0]);
@@ -14021,6 +14054,10 @@ function activeProfileRoot() {
 function openAvatarCropper(dataUrl) {
   const image = new Image();
   image.onload = () => {
+    console.log("[profile-photo] image loaded, opening cropper", {
+      width: image.width,
+      height: image.height,
+    });
     cropState = {
       image,
       zoom: 1,
@@ -14034,7 +14071,10 @@ function openAvatarCropper(dataUrl) {
     elements.avatarCropModal.classList.remove("hidden");
     drawAvatarCrop();
   };
-  image.onerror = () => toast("Could not load this image.");
+  image.onerror = () => {
+    console.error("[profile-photo] image failed to load for cropper");
+    toast("Could not load this image.");
+  };
   image.src = dataUrl;
 }
 
@@ -14108,11 +14148,13 @@ function drawAvatarCrop() {
 async function saveCroppedAvatar() {
   if (!cropState) return;
 
+  console.log("[profile-photo] saving cropped avatar");
   const croppedDataUrl = elements.avatarCropCanvas.toDataURL("image/png", 0.92);
   pendingAvatarDataUrl = croppedDataUrl;
   pendingAvatarPublicId = "";
   profileDraftDirty = true;
   updateProfilePhotoPreview(activeProfileRoot(), pendingAvatarDataUrl);
+  console.log("[profile-photo] preview updated from crop");
 
   const saveButton = elements.saveAvatarCropButton;
   const resetLoading = saveButton ? setButtonLoading(saveButton, true) : () => {};
@@ -14121,9 +14163,11 @@ async function saveCroppedAvatar() {
     if (!state.session?.token) {
       closeAvatarCropper();
       toast("Photo selected. Please login to save it.");
+      console.warn("[profile-photo] cannot upload without session token");
       return;
     }
 
+    console.log("[profile-photo] uploading avatar to /api/upload/avatar/base64");
     const uploadRes = await api("/api/upload/avatar/base64", {
       method: "POST",
       body: {
@@ -14134,8 +14178,14 @@ async function saveCroppedAvatar() {
 
     const uploadedUrl = uploadRes.url || uploadRes.dataUrl || croppedDataUrl;
     const uploadedPublicId = uploadRes.publicId || "";
+    console.log("[profile-photo] avatar upload response received", {
+      hasUrl: Boolean(uploadedUrl),
+      publicId: uploadedPublicId,
+      storage: uploadRes.storage || "",
+    });
     const root = activeProfileRoot();
     const profileDraft = readProfileFormDraft(root);
+    console.log("[profile-photo] saving uploaded avatar URL to profile");
     const { user } = await api("/api/users/profile", {
       method: "PATCH",
       body: {
@@ -14164,6 +14214,7 @@ async function saveCroppedAvatar() {
     renderSidebarAvatar(state.session.user);
     closeAvatarCropper();
     render();
+    console.log("[profile-photo] profile photo saved and UI refreshed");
     toast("Profile photo updated!");
   } catch (error) {
     console.warn("Avatar upload failed:", error);
