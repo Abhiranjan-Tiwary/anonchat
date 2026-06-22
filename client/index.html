@@ -35,12 +35,12 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/css/styles.css?v=chat-fixes-20260621" />
-    <link rel="stylesheet" href="/css/landing-nav-fix.css?v=home-cleanup-20260605" />
+    <link rel="stylesheet" href="/css/styles.css?v=layout-qa-20260622b" />
+    <link rel="stylesheet" href="/css/landing-nav-fix.css?v=layout-qa-20260622b" />
     <link rel="stylesheet" href="/css/auth-page-fix.css?v=home-cleanup-20260605" />
-    <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=home-cleanup-20260605" />
+    <link rel="stylesheet" href="/css/user-chat-room-fix.css?v=layout-qa-20260622b" />
     <script src="/socket.io/socket.io.js" async data-socket-client-loader onerror="this.dataset.failed='true'"></script>
-<script src="/js/app.js?v=chat-fixes-20260621" defer></script>
+<script src="/js/app.js?v=layout-qa-20260622b" defer></script>
   </head>
   <body>
     <div id="sidebarOverlay"></div>
@@ -751,6 +751,15 @@
       </div>
     </div>
 
+    <input
+      class="global-profile-photo-input"
+      id="globalProfilePhotoInput"
+      type="file"
+      accept="image/*"
+      aria-hidden="true"
+      tabindex="-1"
+    />
+
     <div class="modal-backdrop hidden" id="avatarCropModal">
       <div class="modal-card crop-card">
         <div class="modal-head">
@@ -975,6 +984,14 @@
             <div class="call-avatar large" id="callPeerAvatar">A</div>
           </div>
           <video id="localVideo" autoplay playsinline muted tabindex="0" role="button" aria-label="Your video, tap to show full screen"></video>
+          <button class="call-control switch-camera-overlay" type="button" id="switchCameraButton" aria-label="Switch camera" aria-pressed="false" title="Switch camera">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 7h7a4 4 0 0 1 4 4v1" />
+              <path d="m15 9 3-3 3 3" />
+              <path d="M17 17h-7a4 4 0 0 1-4-4v-1" />
+              <path d="m9 15-3 3-3-3" />
+            </svg>
+          </button>
           <div class="call-reaction-overlay" id="callReactionOverlay" aria-live="polite"></div>
         </div>
 
@@ -983,14 +1000,6 @@
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <rect x="3" y="6" width="13" height="12" rx="3" />
               <path d="m16 10 5-3v10l-5-3" />
-            </svg>
-          </button>
-          <button class="call-control" type="button" id="switchCameraButton" aria-label="Switch camera" aria-pressed="false" title="Switch camera">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M7 7h7a4 4 0 0 1 4 4v1" />
-              <path d="m15 9 3-3 3 3" />
-              <path d="M17 17h-7a4 4 0 0 1-4-4v-1" />
-              <path d="m9 15-3 3-3-3" />
             </svg>
           </button>
           <button class="call-control" type="button" id="speakerCallButton" aria-label="Turn speaker on" aria-pressed="false" title="Speaker off">

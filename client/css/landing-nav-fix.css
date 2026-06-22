@@ -91,3 +91,85 @@
     display: none !important;
   }
 }
+
+/* Must stay in this late-loaded file: prevents mobile navbar overflow/cutoff. */
+@media (max-width: 768px) {
+  .landing-nav {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    align-items: center !important;
+    gap: 8px !important;
+    width: 100% !important;
+    max-width: 100vw !important;
+    overflow: hidden !important;
+    padding-inline: 12px !important;
+    box-sizing: border-box !important;
+  }
+
+  .landing-nav .landing-links,
+  .landing-nav .primary-btn.nav-cta {
+    display: none !important;
+  }
+
+  .landing-nav > div {
+    min-width: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    gap: 8px !important;
+  }
+
+  .landing-brand {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+  }
+
+  .landing-brand strong {
+    display: inline-block !important;
+    min-width: 0 !important;
+    max-width: calc(100vw - 168px) !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .landing-nav .theme-toggle {
+    width: 46px !important;
+    min-width: 46px !important;
+    padding: 0 !important;
+  }
+
+  .landing-nav .theme-toggle-label {
+    display: none !important;
+  }
+
+  .landing-nav .ghost-btn.nav-cta {
+    display: inline-flex !important;
+    width: 70px !important;
+    min-width: 70px !important;
+    max-width: 70px !important;
+    padding: 0 10px !important;
+    justify-content: center !important;
+    white-space: nowrap !important;
+  }
+}
+
+@media (max-width: 380px) {
+  .landing-brand strong {
+    max-width: calc(100vw - 154px) !important;
+    font-size: 0.9rem !important;
+  }
+
+  .landing-nav .theme-toggle {
+    width: 42px !important;
+    min-width: 42px !important;
+  }
+
+  .landing-nav .ghost-btn.nav-cta {
+    width: 64px !important;
+    min-width: 64px !important;
+    max-width: 64px !important;
+    font-size: 0.72rem !important;
+  }
+}

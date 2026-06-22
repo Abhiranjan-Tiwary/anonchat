@@ -30,6 +30,7 @@ const MESSAGE_OUTBOX_MAX_ITEMS = 50;
 const PINNED_ROOMS_KEY = "anonchat-pinned-rooms-v1";
 const PINNED_MESSAGES_KEY = "anonchat-pinned-messages-v1";
 const STARRED_MESSAGES_KEY = "anonchat-starred-messages-v1";
+const MEDIA_DOWNLOADS_KEY = "anonchat-downloaded-media-v1";
 const ADMIN_ROUTES = Object.freeze({
   dashboard: "/admin/dashboard",
   users: "/admin/users",
@@ -191,6 +192,7 @@ let state = {
   blockMessageId: null,
   messageSearchQuery: "",
   pendingAttachment: null,
+  downloadedMediaKeys: new Set(loadDownloadedMediaKeys()),
   notifications: [],
   announcements: [],
   resetToken: "",
@@ -265,6 +267,7 @@ let selectedProfileAuthorId = null;
 let selectedProfileMessageId = null;
 let pendingAvatarDataUrl = "";
 let pendingAvatarPublicId = "";
+let activeProfilePhotoForm = null;
 let profileDraftDirty = false;
 let cropState = null;
 let mediaRecorder = null;
@@ -351,6 +354,7 @@ let callState = {
   pendingRemoteCandidates: [],
   signalingReady: false,
   remotePlaybackNotified: false,
+  remotePlaybackRetryTimer: null,
   startedAt: 0,
   durationTimer: null,
   timeoutTimer: null,
@@ -593,6 +597,7 @@ function cacheElements() {
   elements.closeAvatarCropModal = document.querySelector("#closeAvatarCropModal");
   elements.cancelAvatarCropButton = document.querySelector("#cancelAvatarCropButton");
   elements.saveAvatarCropButton = document.querySelector("#saveAvatarCropButton");
+  elements.globalProfilePhotoInput = document.querySelector("#globalProfilePhotoInput");
   elements.passwordResetModal = document.querySelector("#passwordResetModal");
   elements.passwordResetForm = document.querySelector("#passwordResetForm");
   elements.closePasswordResetModal = document.querySelector("#closePasswordResetModal");
@@ -806,6 +811,9 @@ window.addEventListener("beforeunload", () => {
   elements.closeAvatarCropModal.addEventListener("click", closeAvatarCropper);
   elements.cancelAvatarCropButton.addEventListener("click", closeAvatarCropper);
   elements.saveAvatarCropButton.addEventListener("click", saveCroppedAvatar);
+  elements.globalProfilePhotoInput?.addEventListener("change", handleGlobalProfilePhotoChange);
+  document.addEventListener("click", handleProfilePhotoTriggerCapture, true);
+  document.addEventListener("keydown", handleProfilePhotoTriggerKeydown, true);
   elements.closePasswordResetModal.addEventListener("click", closePasswordResetModal);
   elements.requestResetButton.addEventListener("click", requestPasswordReset);
   elements.verifyResetOtpButton?.addEventListener("click", verifyPasswordResetOtp);
@@ -985,7 +993,11 @@ window.addEventListener("beforeunload", () => {
           openLightbox(mediaAction.dataset.mediaSrc, mediaAction.dataset.mediaName || "", mediaAction.dataset.mediaType || "image");
         }
         if (mediaAction.dataset.mediaAction === "download") {
-          await downloadMedia(mediaAction.dataset.mediaSrc, mediaAction.dataset.mediaName);
+          await downloadMedia(mediaAction.dataset.mediaSrc, mediaAction.dataset.mediaName, {
+            type: mediaAction.dataset.mediaType || "",
+            remember: true,
+          });
+          renderMessages();
         }
         if (mediaAction.dataset.mediaAction === "share") {
           await shareMedia(mediaAction.dataset.mediaSrc, mediaAction.dataset.mediaName);
@@ -3319,6 +3331,7 @@ function defaultCallState() {
     pendingRemoteCandidates: [],
     signalingReady: false,
     remotePlaybackNotified: false,
+    remotePlaybackRetryTimer: null,
     startedAt: 0,
     durationTimer: null,
     timeoutTimer: null,
@@ -3604,6 +3617,8 @@ function attachRemoteCallStream() {
   }
   if (elements.remoteAudio) {
     elements.remoteAudio.srcObject = callState.remoteStream;
+    elements.remoteAudio.autoplay = true;
+    elements.remoteAudio.playsInline = true;
     elements.remoteAudio.muted = false;
     elements.remoteAudio.volume = 1;
   }
@@ -3629,12 +3644,11 @@ async function routeRemoteCallAudio() {
     disconnectRemoteAudioRoute();
     callState.remoteAudioSource = callState.audioContext.createMediaStreamSource(callState.remoteStream);
     callState.remoteAudioGain = callState.audioContext.createGain();
-    callState.remoteAudioGain.gain.value = 1;
+    callState.remoteAudioGain.gain.value = 1.35;
     callState.remoteAudioSource.connect(callState.remoteAudioGain);
     callState.remoteAudioGain.connect(callState.audioContext.destination);
     if (elements.remoteAudio) {
-      elements.remoteAudio.muted = true;
-      elements.remoteAudio.pause();
+      elements.remoteAudio.muted = false;
     }
     return true;
   } catch (error) {
@@ -3643,7 +3657,7 @@ async function routeRemoteCallAudio() {
   }
 }
 
-async function playRemoteCallMedia() {
+async function playRemoteCallMedia(options = {}) {
   if (!callState.active || !callState.remoteStream) return;
   const playTasks = [];
   const routedThroughAudioContext = await routeRemoteCallAudio();
@@ -3651,18 +3665,33 @@ async function playRemoteCallMedia() {
     playTasks.push(elements.remoteVideo.play());
   }
   if (elements.remoteAudio?.srcObject) {
-    elements.remoteAudio.muted = routedThroughAudioContext;
-    if (!routedThroughAudioContext) playTasks.push(elements.remoteAudio.play());
+    elements.remoteAudio.muted = false;
+    elements.remoteAudio.volume = 1;
+    playTasks.push(elements.remoteAudio.play());
   }
 
   const results = await Promise.allSettled(playTasks);
   const blocked = !routedThroughAudioContext && results.some((result) => result.status === "rejected");
-  if (blocked && !callState.remotePlaybackNotified) {
+  if (blocked && options.notify !== false && !callState.remotePlaybackNotified) {
     callState.remotePlaybackNotified = true;
     toast("Tap the call screen once to enable call audio.");
   } else if (!blocked) {
     callState.remotePlaybackNotified = false;
   }
+}
+
+function scheduleRemoteCallPlaybackRetries(totalAttempts = 5) {
+  window.clearTimeout(callState.remotePlaybackRetryTimer);
+  let attempt = 0;
+  const retry = () => {
+    if (!callState.active || !callState.remoteStream) return;
+    playRemoteCallMedia({ notify: false }).catch(debugSocketWarning);
+    attempt += 1;
+    if (attempt < totalAttempts) {
+      callState.remotePlaybackRetryTimer = window.setTimeout(retry, 650);
+    }
+  };
+  callState.remotePlaybackRetryTimer = window.setTimeout(retry, 180);
 }
 
 function setupPeerConnection() {
@@ -3684,6 +3713,7 @@ function setupPeerConnection() {
     attachRemoteCallStream();
     event.track.onunmute = () => playRemoteCallMedia();
     playRemoteCallMedia();
+    scheduleRemoteCallPlaybackRetries();
   };
 
   pc.onicecandidate = (event) => {
@@ -3749,6 +3779,7 @@ function activateConnectedCall() {
   startCallQualityMonitor();
   updateCallUi();
   playRemoteCallMedia();
+  scheduleRemoteCallPlaybackRetries();
   return true;
 }
 
@@ -4004,6 +4035,7 @@ async function acceptIncomingCall() {
     if (!activateConnectedCall()) startCallConnectionTimeout();
     updateCallUi();
     playRemoteCallMedia();
+    scheduleRemoteCallPlaybackRetries();
   } catch (error) {
     socket?.emit("call:reject", {
       token: state.session?.token,
@@ -4046,6 +4078,7 @@ async function handleCallAnswer(payload = {}) {
     if (!activateConnectedCall()) startCallConnectionTimeout();
     updateCallUi();
     playRemoteCallMedia();
+    scheduleRemoteCallPlaybackRetries();
   } catch (error) {
     console.warn("Call answer failed:", error);
     endCurrentCall("ended", true);
@@ -4134,6 +4167,7 @@ function cleanupCall() {
   window.clearTimeout(callState.timeoutTimer);
   window.clearTimeout(callState.connectionTimer);
   window.clearTimeout(callState.iceRestartTimer);
+  window.clearTimeout(callState.remotePlaybackRetryTimer);
   window.clearInterval(callState.qualityTimer);
   callState.durationTimer = null;
   callState.timeoutTimer = null;
@@ -4584,14 +4618,21 @@ async function switchCallCamera() {
   let nextStream = null;
 
   try {
-    nextStream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        facingMode: { ideal: nextFacingMode },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      },
-    });
+    const currentTrack = callState.localStream.getVideoTracks()[0];
+    if (currentTrack?.applyConstraints) {
+      try {
+        await currentTrack.applyConstraints({ facingMode: { exact: nextFacingMode } });
+        callState.facingMode = nextFacingMode;
+        elements.localVideo?.play?.().catch(() => {});
+        updateCallUi();
+        toast(nextFacingMode === "environment" ? "Back camera on." : "Front camera on.");
+        return;
+      } catch {
+        // Some browsers cannot switch an active track; replace the track below.
+      }
+    }
+
+    nextStream = await getCameraSwitchStream(nextFacingMode);
     const nextTrack = nextStream.getVideoTracks()[0];
     if (!nextTrack) throw new Error("Camera is not available.");
     if ("contentHint" in nextTrack) nextTrack.contentHint = "motion";
@@ -4607,12 +4648,74 @@ async function switchCallCamera() {
     elements.localVideo?.play?.().catch(() => {});
     callState.cameraOff = false;
     callState.facingMode = nextFacingMode;
-    callState.primaryVideo = "local";
     updateCallUi();
+    toast(nextFacingMode === "environment" ? "Back camera on." : "Front camera on.");
   } catch (error) {
     nextStream?.getTracks?.().forEach((track) => track.stop());
     toast(getMediaErrorMessage(error));
   }
+}
+
+async function getCameraSwitchStream(facingMode) {
+  const baseVideo = {
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+  };
+  const attempts = [];
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices?.();
+    const cameras = (devices || []).filter((device) => device.kind === "videoinput");
+    const preferred = cameraDeviceForFacing(cameras, facingMode);
+    if (preferred?.deviceId) {
+      attempts.push({
+        audio: false,
+        video: { ...baseVideo, deviceId: { exact: preferred.deviceId } },
+      });
+    }
+  } catch {
+    // Browser may hide device labels; facingMode attempts below still work.
+  }
+
+  attempts.push(
+    {
+      audio: false,
+      video: { ...baseVideo, facingMode: { exact: facingMode } },
+    },
+    {
+      audio: false,
+      video: { ...baseVideo, facingMode },
+    },
+    {
+      audio: false,
+      video: { ...baseVideo, facingMode: { ideal: facingMode } },
+    }
+  );
+
+  let lastError = null;
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error("Camera could not be switched.");
+}
+
+function cameraDeviceForFacing(cameras = [], facingMode = "user") {
+  const preferredPattern = facingMode === "environment"
+    ? /(back|rear|environment|world|wide|0\.5|main)/i
+    : /(front|user|face|selfie)/i;
+  const avoidPattern = facingMode === "environment"
+    ? /(front|user|face|selfie)/i
+    : /(back|rear|environment|world)/i;
+
+  return cameras.find((camera) => preferredPattern.test(camera.label || "")) ||
+    cameras.find((camera) => !avoidPattern.test(camera.label || "")) ||
+    cameras[0] ||
+    null;
 }
 
 function toggleCallFullscreen() {
@@ -7334,7 +7437,7 @@ function renderDmMessage(message, grouped = false) {
         </div>
         ${replyBlock}
         ${bodyBlock}
-        ${deleted ? "" : renderAttachment(message.attachment)}
+        ${deleted ? "" : renderAttachment(message.attachment, message)}
       </div>
     </article>
   `;
@@ -7815,36 +7918,43 @@ function openCreateRoomModal() {
   elements.composerPlaceholderTitle.textContent = "Create Your Room";
   elements.composerPlaceholderBody.innerHTML = `
     <form class="create-room-form" id="createRoomForm">
-      <label for="createRoomName">Room Name</label>
-      <input id="createRoomName" name="name" required maxlength="50" placeholder="e.g. Study Squad, Friend Group" />
-      <label for="createRoomDescription">Room Description</label>
-      <textarea id="createRoomDescription" name="description" rows="3" maxlength="200" placeholder="What is this room about?"></textarea>
-      <label>Room Icon</label>
-      <div class="emoji-option-grid" role="radiogroup">
-        ${emojis.map((emoji, index) => `<button class="${index === 0 ? "active" : ""}" type="button" data-room-emoji="${escapeAttr(emoji)}">${escapeHtml(emoji)}</button>`).join("")}
-      </div>
-      <label>Room Color</label>
-      <div class="color-option-grid" role="radiogroup">
-        ${colors.map((color, index) => `<button class="${index === 0 ? "active" : ""}" type="button" style="--swatch:${color}" data-room-color="${color}" aria-label="${color}"></button>`).join("")}
-      </div>
-      <input type="hidden" id="createRoomVisibility" name="visibility" value="public" />
-      <div class="form-two-column" role="radiogroup" aria-label="Room visibility">
-        <button class="choice-card active" type="button" data-room-visibility="public" aria-pressed="true">
-          <span>Public</span>
-          <small>Anyone can join</small>
+      <section class="create-room-section">
+        <label for="createRoomName">Room Name</label>
+        <input id="createRoomName" name="name" required maxlength="50" placeholder="e.g. Study Squad, Friend Group" />
+        <label for="createRoomDescription">Room Description</label>
+        <textarea id="createRoomDescription" name="description" rows="3" maxlength="200" placeholder="What is this room about?"></textarea>
+      </section>
+      <section class="create-room-section">
+        <label>Room Icon</label>
+        <div class="emoji-option-grid" role="radiogroup">
+          ${emojis.map((emoji, index) => `<button class="${index === 0 ? "active" : ""}" type="button" data-room-emoji="${escapeAttr(emoji)}">${escapeHtml(emoji)}</button>`).join("")}
+        </div>
+        <label>Room Color</label>
+        <div class="color-option-grid" role="radiogroup">
+          ${colors.map((color, index) => `<button class="${index === 0 ? "active" : ""}" type="button" style="--swatch:${color}" data-room-color="${color}" aria-label="${color}"></button>`).join("")}
+        </div>
+      </section>
+      <section class="create-room-section">
+        <label>Room Access</label>
+        <input type="hidden" id="createRoomVisibility" name="visibility" value="public" />
+        <div class="form-two-column create-room-visibility-grid" role="radiogroup" aria-label="Room visibility">
+          <button class="choice-card active" type="button" data-room-visibility="public" aria-pressed="true">
+            <span>Public</span>
+            <small>Anyone can join</small>
+          </button>
+          <button class="choice-card" type="button" data-room-visibility="private" aria-pressed="false">
+            <span>Private</span>
+            <small>Invite only</small>
+          </button>
+        </div>
+        <button class="settings-row toggle-setting-row create-room-toggle" type="button" id="createRoomPasswordToggle" aria-pressed="false">
+          <div><strong>Password Protection</strong><span>Require password to enter</span></div>
+          <span class="switch-ui" aria-hidden="true"></span>
         </button>
-        <button class="choice-card" type="button" data-room-visibility="private" aria-pressed="false">
-          <span>Private</span>
-          <small>Invite only</small>
-        </button>
-      </div>
-      <button class="settings-row toggle-setting-row create-room-toggle" type="button" id="createRoomPasswordToggle" aria-pressed="false">
-        <div><strong>Password Protection</strong><span>Require password to enter</span></div>
-        <span class="switch-ui" aria-hidden="true"></span>
-      </button>
-      <input class="hidden" id="createRoomPassword" type="password" minlength="4" maxlength="80" placeholder="Room password" disabled />
-      <label for="createRoomMaxMembers">Max Members</label>
-      <input id="createRoomMaxMembers" type="number" min="2" max="250" value="50" />
+        <input class="hidden create-room-password-field" id="createRoomPassword" type="password" minlength="4" maxlength="80" placeholder="Room password" disabled />
+        <label for="createRoomMaxMembers">Max Members</label>
+        <input id="createRoomMaxMembers" type="number" min="2" max="250" value="50" />
+      </section>
       <div class="modal-actions">
         <button class="ghost-btn" type="button" data-modal-cancel>Cancel</button>
         <button class="primary-btn" type="submit">Create Room</button>
@@ -7955,6 +8065,7 @@ function renderProfilePage() {
 
   pendingAvatarDataUrl = "";
   pendingAvatarPublicId = "";
+  activeProfilePhotoForm = null;
   profileDraftDirty = false;
   elements.homeView.innerHTML = `
     <div class="profile-route-page">
@@ -7974,22 +8085,20 @@ function profileFormMarkup(user) {
   return `
     <form class="profile-form profile-page-form" id="profileForm">
       <div class="profile-large">
-        <label class="profile-photo-button" id="profilePhotoButton" aria-label="Change profile photo">
+        <button class="profile-photo-button" id="profilePhotoButton" type="button" data-profile-photo-trigger aria-label="Change profile photo">
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
-          <input class="profile-photo-native-input" data-profile-photo-input type="file" accept="image/*" />
-        </label>
+        </button>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <label class="profile-photo-action change" id="changeProfilePhotoButton">
+          <button class="profile-photo-action change" id="changeProfilePhotoButton" type="button" data-profile-photo-trigger>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
             </svg>
             <span>${hasPhoto ? "Change photo" : "Add photo"}</span>
-            <input class="profile-photo-native-input" data-profile-photo-input type="file" accept="image/*" />
-          </label>
+          </button>
           <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${hasPhoto ? "" : "disabled"}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
@@ -7998,7 +8107,7 @@ function profileFormMarkup(user) {
           </button>
         </div>
         <h2>${escapeHtml(user.name)}</h2>
-        <p class="muted">@${escapeHtml(user.username)} - ${escapeHtml(user.campus)}</p>
+        <p class="muted">@${escapeHtml(user.username || "user")}${user.campus ? ` - ${escapeHtml(user.campus)}` : ""}</p>
       </div>
       <label for="profilePublicNameInput">Chat display name</label>
       <input id="profilePublicNameInput" value="${escapeAttr(user.name || "")}" maxlength="40" placeholder="Name shown in chat" />
@@ -10337,7 +10446,13 @@ async function handleMessageContextMenuClick(event) {
       elements.chatFeed?.querySelector(`.message[data-message-id="${cssEscape(messageId)}"]`)?.classList.toggle("selected-message");
     } else if (action === "save") {
       const source = message.attachment?.dataUrl || message.attachment?.url || "";
-      if (source) await downloadMedia(source, message.attachment?.name || "anonchat-media");
+      if (source) {
+        await downloadMedia(source, message.attachment?.name || "anonchat-media", {
+          type: message.attachment?.kind || "",
+          remember: true,
+        });
+        renderMessages();
+      }
       else {
         await navigator.clipboard?.writeText?.(message.text || "");
         toast("Message text saved to clipboard.");
@@ -10832,7 +10947,7 @@ function renderMessage(message, grouped = false) {
     : message.type === "poll"
       ? renderPoll(message)
       : `<p class="message-text">${highlightedMessageText(message.text)}</p>`;
-  const attachmentBlock = deleted ? "" : renderAttachment(message.attachment);
+  const attachmentBlock = deleted ? "" : renderAttachment(message.attachment, message);
   const reactionPicker = state.activeReactionMessageId === message.id ? renderReactionPicker(message.id) : "";
   const reactionBlock = deleted ? "" : renderMessageReactions(message);
 
@@ -10997,12 +11112,17 @@ function renderReplyPreview() {
   });
 }
 
-function renderAttachment(attachment) {
+function renderAttachment(attachment, message = {}) {
   if (!attachment) return "";
   const source = attachmentPlayableSource(attachment);
   const name = attachment.name || "Attachment";
-  const actions = mediaAttachmentActions(source, name, attachment.kind);
+  const downloaded = attachmentIsDownloaded(attachment, message);
+  const actions = mediaAttachmentActions(source, name, attachment.kind, { downloaded });
   const secureMediaAttrs = mediaSecurityAttrs(source);
+
+  if (!downloaded) {
+    return renderAttachmentDownloadGate(attachment, source, name);
+  }
 
   if (attachment.kind === "image") {
     return `
@@ -11069,6 +11189,48 @@ function attachmentPlayableSource(attachment = {}) {
   return "";
 }
 
+function attachmentIsDownloaded(attachment = {}, message = {}) {
+  const source = attachmentPlayableSource(attachment);
+  if (!source) return true;
+  if (messageBelongsToCurrentUser(message)) return true;
+  if (loadUserSettings().mediaAutoDownload) return true;
+  return state.downloadedMediaKeys?.has?.(mediaDownloadKey(source, attachment.name || "Attachment", attachment.kind || ""));
+}
+
+function messageBelongsToCurrentUser(message = {}) {
+  const currentUserId = String(state.session?.user?.id || "");
+  if (!currentUserId) return false;
+  return [message.authorId, message.senderId, message.userId, message.createdBy].some(
+    (value) => String(value || "") === currentUserId
+  );
+}
+
+function renderAttachmentDownloadGate(attachment = {}, source = "", name = "Attachment") {
+  const kind = attachment.voiceNote ? "voice" : attachment.kind || "file";
+  const labels = {
+    image: ["Image", "Download to view photo"],
+    video: ["Video", "Download to watch video"],
+    audio: ["Audio", "Download to play audio"],
+    voice: ["Voice note", "Download to play voice note"],
+    file: ["File", "Download to open this file"],
+  };
+  const [kindLabel, hint] = labels[kind] || labels.file;
+  const icon = kind === "image" ? "IMG" : kind === "video" ? "VID" : kind === "audio" || kind === "voice" ? "AUD" : "DOC";
+  const size = Number(attachment.size || 0);
+
+  return `
+    <div class="message-attachment media-download-gate ${escapeAttr(kind)}-download-gate">
+      <span class="media-download-icon" aria-hidden="true">${icon}</span>
+      <div class="media-download-copy">
+        <strong>${escapeHtml(kindLabel)}</strong>
+        <span>${escapeHtml(name)}</span>
+        <small>${escapeHtml(hint)}${size ? ` - ${formatBytes(size)}` : ""}</small>
+      </div>
+      ${mediaAttachmentActions(source, name, attachment.kind || "file", { downloaded: false })}
+    </div>
+  `;
+}
+
 function isRemoteMediaSource(source = "") {
   return /^https?:\/\//i.test(String(source || ""));
 }
@@ -11130,13 +11292,14 @@ function syncVoicePlayButton(audio) {
   shell?.classList.toggle("playing", playing);
 }
 
-function mediaAttachmentActions(source, name = "Attachment", type = "file") {
+function mediaAttachmentActions(source, name = "Attachment", type = "file", options = {}) {
   if (!source) return "";
   const canPreview = ["image", "video", "audio"].includes(type);
+  const downloaded = Boolean(options.downloaded);
   return `
     <div class="media-attachment-actions">
-      ${canPreview ? `<button type="button" data-media-action="open" data-media-src="${escapeAttr(source)}" data-media-name="${escapeAttr(name)}" data-media-type="${escapeAttr(type)}">Open</button>` : ""}
-      <button type="button" data-media-action="download" data-media-src="${escapeAttr(source)}" data-media-name="${escapeAttr(name)}">Download</button>
+      ${downloaded && canPreview ? `<button type="button" data-media-action="open" data-media-src="${escapeAttr(source)}" data-media-name="${escapeAttr(name)}" data-media-type="${escapeAttr(type)}">Open</button>` : ""}
+      <button type="button" data-media-action="download" data-media-src="${escapeAttr(source)}" data-media-name="${escapeAttr(name)}" data-media-type="${escapeAttr(type)}">${downloaded ? "Save" : "Download"}</button>
       <button type="button" data-media-action="share" data-media-src="${escapeAttr(source)}" data-media-name="${escapeAttr(name)}">Share</button>
     </div>
   `;
@@ -11273,7 +11436,8 @@ async function handleMediaGalleryClick(event) {
   if (target.dataset.galleryAction === "open") {
     openLightbox(source, name, target.dataset.mediaType || "image");
   } else {
-    await downloadMedia(source, name);
+    await downloadMedia(source, name, { remember: true });
+    renderMessages();
   }
 }
 
@@ -11476,7 +11640,7 @@ function stopMediaPan() {
 }
 
 function downloadOpenMedia() {
-  downloadMedia(mediaViewerState.src, mediaViewerState.caption || "anonchat-media").catch(handleApiError);
+  downloadMedia(mediaViewerState.src, mediaViewerState.caption || "anonchat-media", { remember: true }).catch(handleApiError);
 }
 
 async function shareOpenMedia() {
@@ -11495,6 +11659,59 @@ function safeDownloadName(name = "anonchat-media") {
   return value || fallback;
 }
 
+function mediaDownloadKey(src = "", name = "Attachment", type = "file") {
+  const source = String(src || "");
+  const sourceFingerprint = source.length > 512
+    ? `${source.slice(0, 160)}:${source.length}:${source.slice(-80)}`
+    : source;
+  return `${type || "file"}:${hashString(`${name}|${sourceFingerprint}`)}`;
+}
+
+function hashString(value = "") {
+  let hash = 5381;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function loadDownloadedMediaKeys() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(MEDIA_DOWNLOADS_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed.slice(-600) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberDownloadedMedia(src = "", name = "Attachment", type = "file") {
+  if (!src) return;
+  if (!(state.downloadedMediaKeys instanceof Set)) state.downloadedMediaKeys = new Set();
+  state.downloadedMediaKeys.add(mediaDownloadKey(src, name, type));
+  try {
+    localStorage.setItem(MEDIA_DOWNLOADS_KEY, JSON.stringify([...state.downloadedMediaKeys].slice(-600)));
+  } catch {
+    // Storage can be full/private; current session still keeps the media unlocked.
+  }
+}
+
+function cloudinaryAttachmentUrl(src = "") {
+  if (!/^https:\/\/res\.cloudinary\.com\//i.test(src) || !src.includes("/upload/")) return "";
+  return src.replace("/upload/", "/upload/fl_attachment/");
+}
+
+function fileBlobFromDataUrl(dataUrl = "") {
+  const [meta = "", base64 = ""] = dataUrl.split(",");
+  const mimeMatch = meta.match(/^data:([^;]+);base64$/i);
+  if (!mimeMatch || !base64) return null;
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Blob([bytes], { type: mimeMatch[1] });
+}
+
 function triggerDownload(url, name = "anonchat-media") {
   const link = document.createElement("a");
   link.href = url;
@@ -11506,33 +11723,41 @@ function triggerDownload(url, name = "anonchat-media") {
   link.remove();
 }
 
-async function downloadMedia(src, name = "anonchat-media") {
+async function downloadMedia(src, name = "anonchat-media", options = {}) {
   if (!src) return;
   const fileName = safeDownloadName(name);
-
-  if (/^(data:|blob:)/i.test(src)) {
-    triggerDownload(src, fileName);
-    toast("Download started.");
-    return;
-  }
+  const type = options.type || "";
+  let objectUrl = "";
 
   try {
-    const response = await fetch(src, {
-      method: "GET",
-      mode: "cors",
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-    });
-    if (!response.ok) throw new Error(`Download failed with ${response.status}`);
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
+    let blob = null;
+    if (/^data:/i.test(src)) {
+      blob = fileBlobFromDataUrl(src) || await (await fetch(src)).blob();
+    } else if (/^blob:/i.test(src)) {
+      blob = await (await fetch(src)).blob();
+    } else {
+      const response = await fetch(src, {
+        method: "GET",
+        mode: "cors",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      });
+      if (!response.ok) throw new Error(`Download failed with ${response.status}`);
+      blob = await response.blob();
+    }
+
+    objectUrl = URL.createObjectURL(blob);
     triggerDownload(objectUrl, fileName);
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 45000);
+    if (options.remember !== false) rememberDownloadedMedia(src, name, type);
     toast("Download started.");
+    return;
   } catch (error) {
     console.warn("Direct media download failed, opening source:", error);
-    triggerDownload(src, fileName);
-    toast("Opening file. If it does not download, use Save from the browser menu.");
+    const fallbackUrl = cloudinaryAttachmentUrl(src) || src;
+    triggerDownload(fallbackUrl, fileName);
+    if (options.remember !== false) rememberDownloadedMedia(src, name, type);
+    toast("Download opened. If it appears in a new tab, use Save from browser menu.");
   }
 }
 
@@ -13365,26 +13590,25 @@ function renderProfilePanel() {
   if (profileDraftDirty && elements.profilePanel.querySelector("#profileForm")) return;
   pendingAvatarDataUrl = "";
   pendingAvatarPublicId = "";
+  activeProfilePhotoForm = null;
   profileDraftDirty = false;
   elements.profilePanel.innerHTML = `
     <form class="profile-form" id="profileForm">
       <div class="profile-large">
-        <label class="profile-photo-button" id="profilePhotoButton" aria-label="Change profile photo">
+        <button class="profile-photo-button" id="profilePhotoButton" type="button" data-profile-photo-trigger aria-label="Change profile photo">
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
-          <input class="profile-photo-native-input" data-profile-photo-input type="file" accept="image/*" />
-        </label>
+        </button>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <label class="profile-photo-action change" id="changeProfilePhotoButton">
+          <button class="profile-photo-action change" id="changeProfilePhotoButton" type="button" data-profile-photo-trigger>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
             </svg>
             <span>${user.avatarDataUrl ? "Change photo" : "Add photo"}</span>
-            <input class="profile-photo-native-input" data-profile-photo-input type="file" accept="image/*" />
-          </label>
+          </button>
           <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${user.avatarDataUrl ? "" : "disabled"}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
@@ -13393,7 +13617,7 @@ function renderProfilePanel() {
           </button>
         </div>
         <h2>${escapeHtml(user.name)}</h2>
-        <p class="muted">@${escapeHtml(user.username)} - ${escapeHtml(user.campus)}</p>
+        <p class="muted">@${escapeHtml(user.username || "user")}${user.campus ? ` - ${escapeHtml(user.campus)}` : ""}</p>
         <p class="muted">Your display name and photo appear on your chat messages.</p>
       </div>
       <label for="profileFullNameInput">Account name</label>
@@ -13666,7 +13890,67 @@ async function processProfilePhotoFile(file) {
     return;
   }
 
-  openAvatarCropper(await fileToDataUrl(file));
+  try {
+    openAvatarCropper(await fileToDataUrl(file));
+  } catch (error) {
+    console.warn("Could not read profile photo:", error);
+    toast("Could not open this photo. Try another image.");
+  }
+}
+
+function profilePhotoTriggerMatch(target) {
+  const trigger = target?.closest?.("[data-profile-photo-trigger], #profilePhotoButton, #changeProfilePhotoButton");
+  if (!trigger) return null;
+
+  const form = trigger.closest("#profileForm");
+  if (!form) return null;
+
+  const profileSurface =
+    elements.homeView?.contains(form) ||
+    elements.profilePanel?.contains(form) ||
+    document.querySelector(".profile-route-page")?.contains(form);
+
+  return profileSurface ? { trigger, form } : null;
+}
+
+function openGlobalProfilePhotoPicker(form) {
+  activeProfilePhotoForm = form || activeProfileRoot();
+  const input = elements.globalProfilePhotoInput || document.querySelector("#globalProfilePhotoInput");
+  if (!input) {
+    openProfilePhotoPicker(activeProfilePhotoForm);
+    return;
+  }
+
+  input.value = "";
+  input.click();
+}
+
+function handleProfilePhotoTriggerCapture(event) {
+  const match = profilePhotoTriggerMatch(event.target);
+  if (!match) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  profileDraftDirty = true;
+  openGlobalProfilePhotoPicker(match.form);
+}
+
+function handleProfilePhotoTriggerKeydown(event) {
+  if (event.key !== "Enter" && event.key !== " ") return;
+
+  const match = profilePhotoTriggerMatch(event.target);
+  if (!match) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  profileDraftDirty = true;
+  openGlobalProfilePhotoPicker(match.form);
+}
+
+async function handleGlobalProfilePhotoChange(event) {
+  const input = event.target;
+  await processProfilePhotoFile(input.files?.[0]);
+  input.value = "";
 }
 
 function openProfilePhotoPicker(root = activeProfileRoot()) {
@@ -13690,7 +13974,8 @@ function openProfilePhotoPicker(root = activeProfileRoot()) {
 }
 
 function activeProfileRoot() {
-  return document.querySelector(".profile-route-page") ||
+  return activeProfilePhotoForm ||
+    document.querySelector(".profile-route-page") ||
     document.querySelector(".settings-page") ||
     document.querySelector(".my-rooms-page") ||
     elements.profilePanel;
@@ -13940,6 +14225,7 @@ async function handleProfilePanelClick(event) {
     saveSession(state.session);
     pendingAvatarDataUrl = "";
     pendingAvatarPublicId = "";
+    activeProfilePhotoForm = null;
     profileDraftDirty = false;
     await refreshState();
     render();
