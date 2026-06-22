@@ -13959,6 +13959,13 @@ function handleProfilePhotoTriggerCapture(event) {
   const match = profilePhotoTriggerMatch(event.target);
   if (!match) return;
 
+  const inlineInput = match.trigger.querySelector?.("[data-profile-photo-input]");
+  if (inlineInput) {
+    activeProfilePhotoForm = match.form;
+    profileDraftDirty = true;
+    return;
+  }
+
   event.preventDefault();
   event.stopPropagation();
   profileDraftDirty = true;
