@@ -8085,20 +8085,22 @@ function profileFormMarkup(user) {
   return `
     <form class="profile-form profile-page-form" id="profileForm">
       <div class="profile-large">
-        <button class="profile-photo-button" id="profilePhotoButton" type="button" data-profile-photo-trigger aria-label="Change profile photo">
+        <label class="profile-photo-button" id="profilePhotoButton" data-profile-photo-trigger role="button" tabindex="0" aria-label="Change profile photo">
+          ${profilePhotoNativeInputMarkup()}
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
-        </button>
+        </label>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <button class="profile-photo-action change" id="changeProfilePhotoButton" type="button" data-profile-photo-trigger>
+          <label class="profile-photo-action change" id="changeProfilePhotoButton" data-profile-photo-trigger role="button" tabindex="0">
+            ${profilePhotoNativeInputMarkup()}
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
             </svg>
             <span>${hasPhoto ? "Change photo" : "Add photo"}</span>
-          </button>
+          </label>
           <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${hasPhoto ? "" : "disabled"}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
@@ -11231,6 +11233,18 @@ function renderAttachmentDownloadGate(attachment = {}, source = "", name = "Atta
   `;
 }
 
+function profilePhotoNativeInputMarkup() {
+  return `
+    <input
+      class="profile-photo-native-input"
+      type="file"
+      accept="image/*"
+      data-profile-photo-input
+      aria-label="Choose profile photo"
+    />
+  `;
+}
+
 function isRemoteMediaSource(source = "") {
   return /^https?:\/\//i.test(String(source || ""));
 }
@@ -13595,20 +13609,22 @@ function renderProfilePanel() {
   elements.profilePanel.innerHTML = `
     <form class="profile-form" id="profileForm">
       <div class="profile-large">
-        <button class="profile-photo-button" id="profilePhotoButton" type="button" data-profile-photo-trigger aria-label="Change profile photo">
+        <label class="profile-photo-button" id="profilePhotoButton" data-profile-photo-trigger role="button" tabindex="0" aria-label="Change profile photo">
+          ${profilePhotoNativeInputMarkup()}
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
-        </button>
+        </label>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <button class="profile-photo-action change" id="changeProfilePhotoButton" type="button" data-profile-photo-trigger>
+          <label class="profile-photo-action change" id="changeProfilePhotoButton" data-profile-photo-trigger role="button" tabindex="0">
+            ${profilePhotoNativeInputMarkup()}
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
             </svg>
             <span>${user.avatarDataUrl ? "Change photo" : "Add photo"}</span>
-          </button>
+          </label>
           <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${user.avatarDataUrl ? "" : "disabled"}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
@@ -13926,6 +13942,13 @@ function openGlobalProfilePhotoPicker(form) {
 }
 
 function handleProfilePhotoTriggerCapture(event) {
+  const nativeInput = event.target.closest?.("[data-profile-photo-input]");
+  if (nativeInput) {
+    activeProfilePhotoForm = nativeInput.closest("#profileForm") || activeProfileRoot();
+    profileDraftDirty = true;
+    return;
+  }
+
   const match = profilePhotoTriggerMatch(event.target);
   if (!match) return;
 

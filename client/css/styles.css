@@ -13406,6 +13406,7 @@ html[data-theme="light"] .call-screen {
   opacity: 0;
   cursor: pointer;
   font-size: 0;
+  z-index: 5;
 }
 
 .profile-photo-frame .profile-photo-preview {
