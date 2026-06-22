@@ -31,6 +31,8 @@ const PINNED_ROOMS_KEY = "anonchat-pinned-rooms-v1";
 const PINNED_MESSAGES_KEY = "anonchat-pinned-messages-v1";
 const STARRED_MESSAGES_KEY = "anonchat-starred-messages-v1";
 const MEDIA_DOWNLOADS_KEY = "anonchat-downloaded-media-v1";
+const PROFILE_PHOTO_ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const PROFILE_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 const ADMIN_ROUTES = Object.freeze({
   dashboard: "/admin/dashboard",
   users: "/admin/users",
@@ -11238,7 +11240,7 @@ function profilePhotoNativeInputMarkup() {
     <input
       class="profile-photo-native-input"
       type="file"
-      accept="image/*"
+      accept="image/jpeg,image/png,image/webp,image/gif"
       data-profile-photo-input
       aria-label="Choose profile photo"
     />
@@ -13901,8 +13903,13 @@ async function handleProfilePanelChange(event) {
 
 async function processProfilePhotoFile(file) {
   if (!file) return;
-  if (!file.type.startsWith("image/")) {
-    toast("Choose an image file.");
+  if (!PROFILE_PHOTO_ALLOWED_TYPES.has(file.type)) {
+    toast("Please select a valid image (JPG, PNG, WEBP, or GIF).");
+    return;
+  }
+
+  if (file.size > PROFILE_PHOTO_MAX_BYTES) {
+    toast("Image must be under 5MB.");
     return;
   }
 
@@ -14091,16 +14098,73 @@ function drawAvatarCrop() {
   context.restore();
 }
 
-function saveCroppedAvatar() {
+async function saveCroppedAvatar() {
   if (!cropState) return;
 
-  pendingAvatarDataUrl = elements.avatarCropCanvas.toDataURL("image/png", 0.92);
+  const croppedDataUrl = elements.avatarCropCanvas.toDataURL("image/png", 0.92);
+  pendingAvatarDataUrl = croppedDataUrl;
   pendingAvatarPublicId = "";
   profileDraftDirty = true;
   updateProfilePhotoPreview(activeProfileRoot(), pendingAvatarDataUrl);
 
-  closeAvatarCropper();
-  toast("Photo cropped. Click Save profile to update it.");
+  const saveButton = elements.saveAvatarCropButton;
+  const resetLoading = saveButton ? setButtonLoading(saveButton, true) : () => {};
+
+  try {
+    if (!state.session?.token) {
+      closeAvatarCropper();
+      toast("Photo selected. Please login to save it.");
+      return;
+    }
+
+    const uploadRes = await api("/api/upload/avatar/base64", {
+      method: "POST",
+      body: {
+        token: state.session.token,
+        dataUrl: croppedDataUrl,
+      },
+    });
+
+    const uploadedUrl = uploadRes.url || uploadRes.dataUrl || croppedDataUrl;
+    const uploadedPublicId = uploadRes.publicId || "";
+    const root = activeProfileRoot();
+    const profileDraft = readProfileFormDraft(root);
+    const { user } = await api("/api/users/profile", {
+      method: "PATCH",
+      body: {
+        token: state.session.token,
+        profile: {
+          ...profileDraft,
+          avatarDataUrl: uploadedUrl,
+          avatarPublicId: uploadedPublicId,
+          privacySettings: {
+            ...(state.session.user.privacySettings || {}),
+            lastSeen: profileDraft.lastSeen,
+            onlineVisibility: profileDraft.onlineVisibility,
+          },
+          themePreference: loadUserSettings().theme,
+        },
+      },
+    });
+
+    state.session.user = { ...state.session.user, ...user };
+    saveSession(state.session);
+    pendingAvatarDataUrl = "";
+    pendingAvatarPublicId = "";
+    profileDraftDirty = false;
+    activeProfilePhotoForm = null;
+    updateProfilePhotoPreview(root, state.session.user.avatarDataUrl || uploadedUrl);
+    renderSidebarAvatar(state.session.user);
+    closeAvatarCropper();
+    render();
+    toast("Profile photo updated!");
+  } catch (error) {
+    console.warn("Avatar upload failed:", error);
+    closeAvatarCropper();
+    toast("Photo preview ready. Click Save Profile to finish.");
+  } finally {
+    resetLoading();
+  }
 }
 
 function readProfileFormDraft(root) {
