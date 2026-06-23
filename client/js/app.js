@@ -337,6 +337,8 @@ let mediaViewerState = {
   originX: 0,
   originY: 0,
 };
+let currentCameraFacingMode = "user";
+let lastCameraSwitchTouchAt = 0;
 let callState = {
   active: false,
   direction: "",
@@ -369,7 +371,9 @@ let callState = {
   muted: false,
   speakerOn: false,
   cameraOff: false,
-  facingMode: "user",
+  facingMode: currentCameraFacingMode,
+  videoTrackFacingMode: currentCameraFacingMode,
+  switchingCamera: false,
   primaryVideo: "remote",
   sharingScreen: false,
   screenTrack: null,
@@ -866,6 +870,7 @@ window.addEventListener("beforeunload", () => {
   elements.shareScreenCallButton?.addEventListener("click", toggleCallScreenShare);
   elements.sendMessageCallButton?.addEventListener("click", sendMessageFromCall);
   elements.switchCameraButton?.addEventListener("click", switchCallCamera);
+  elements.switchCameraButton?.addEventListener("touchend", switchCallCamera, { passive: false });
   elements.fullscreenCallButton?.addEventListener("click", toggleCallFullscreen);
   elements.minimizeCallButton?.addEventListener("click", minimizeCallUi);
   elements.floatingCallWidget?.addEventListener("click", restoreCallUi);
@@ -3346,7 +3351,9 @@ function defaultCallState() {
     muted: false,
     speakerOn: false,
     cameraOff: false,
-    facingMode: "user",
+    facingMode: currentCameraFacingMode,
+    videoTrackFacingMode: currentCameraFacingMode,
+    switchingCamera: false,
     primaryVideo: "remote",
     sharingScreen: false,
     screenTrack: null,
@@ -3594,6 +3601,10 @@ async function prepareLocalMedia(type) {
   }
   if (type === "video" && !callState.localStream.getVideoTracks().length) {
     throw new Error("Camera could not be started.");
+  }
+  if (type === "video") {
+    callState.facingMode = currentCameraFacingMode;
+    callState.videoTrackFacingMode = currentCameraFacingMode;
   }
   callState.localStream.getAudioTracks().forEach((track) => {
     track.enabled = true;
@@ -4291,7 +4302,7 @@ function updateCallUi() {
     active: callState.facingMode === "environment",
     label: callState.facingMode === "environment" ? "Switch to front camera" : "Switch to back camera",
     title: callState.facingMode === "environment" ? "Front camera" : "Back camera",
-    disabled: callState.type !== "video" || callState.sharingScreen || callState.cameraOff,
+    disabled: callState.type !== "video" || callState.sharingScreen || callState.switchingCamera,
   });
   if (elements.fullscreenCallButton) {
     const label = elements.fullscreenCallButton.querySelector("[data-call-action-label]");
@@ -4590,7 +4601,7 @@ function toggleCallMute() {
   updateCallUi();
 }
 
-function toggleCallCamera() {
+async function toggleCallCamera() {
   if (callState.sharingScreen) {
     toast("Stop screen sharing before changing the camera.");
     return;
@@ -4600,124 +4611,192 @@ function toggleCallCamera() {
     toast("Camera is not available in this call.");
     return;
   }
+  if (callState.cameraOff) {
+    callState.switchingCamera = true;
+    updateCallUi();
+    try {
+      const selectedFacingMode = normalizeFacingMode(callState.facingMode || currentCameraFacingMode);
+      const nextTrack = await createVideoTrackForFacingMode(selectedFacingMode);
+      await replaceActiveCallVideoTrack(nextTrack, selectedFacingMode, { enableTrack: true });
+      callState.cameraOff = false;
+      callState.primaryVideo = "local";
+    } catch (error) {
+      console.warn("[call-camera] camera restore failed", error);
+      videoTrack.enabled = true;
+      callState.cameraOff = false;
+      toast("Unable to switch camera");
+    } finally {
+      callState.switchingCamera = false;
+      updateCallUi();
+    }
+    return;
+  }
   videoTrack.enabled = !videoTrack.enabled;
   callState.cameraOff = !videoTrack.enabled;
   if (callState.cameraOff && callState.primaryVideo === "local") callState.primaryVideo = "remote";
   updateCallUi();
 }
 
-async function switchCallCamera() {
+async function switchCallCamera(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  if (event?.type === "touchend") {
+    lastCameraSwitchTouchAt = Date.now();
+  } else if (event?.type === "click" && Date.now() - lastCameraSwitchTouchAt < 650) {
+    return;
+  }
+
   if (callState.type !== "video" || !callState.localStream || !callState.pc) return;
   if (callState.sharingScreen) {
     toast("Stop screen sharing before switching the camera.");
     return;
   }
+  if (callState.switchingCamera) return;
+
+  const currentFacingMode = normalizeFacingMode(callState.facingMode || currentCameraFacingMode);
+  const nextFacingMode = currentFacingMode === "user" ? "environment" : "user";
+  console.log("[call-camera] camera switch requested", {
+    currentFacingMode,
+    nextFacingMode,
+    cameraOff: callState.cameraOff,
+  });
+  console.log("[call-camera] current facing mode", currentFacingMode);
+  console.log("[call-camera] next facing mode", nextFacingMode);
+
+  setCurrentCameraFacingMode(nextFacingMode);
+
   if (callState.cameraOff) {
-    toast("Turn camera on before switching cameras.");
+    console.log("[call-camera] camera is off; saved selected facing mode without turning camera on", {
+      nextFacingMode,
+    });
+    updateCallUi();
+    toast("Camera switched");
     return;
   }
-  const nextFacingMode = callState.facingMode === "user" ? "environment" : "user";
-  let nextStream = null;
 
+  callState.switchingCamera = true;
+  updateCallUi();
   try {
-    const currentTrack = callState.localStream.getVideoTracks()[0];
-    if (currentTrack?.applyConstraints) {
-      try {
-        await currentTrack.applyConstraints({ facingMode: { exact: nextFacingMode } });
-        callState.facingMode = nextFacingMode;
-        elements.localVideo?.play?.().catch(() => {});
-        updateCallUi();
-        toast(nextFacingMode === "environment" ? "Back camera on." : "Front camera on.");
-        return;
-      } catch {
-        // Some browsers cannot switch an active track; replace the track below.
-      }
-    }
-
-    nextStream = await getCameraSwitchStream(nextFacingMode);
-    const nextTrack = nextStream.getVideoTracks()[0];
-    if (!nextTrack) throw new Error("Camera is not available.");
-    if ("contentHint" in nextTrack) nextTrack.contentHint = "motion";
-    const sender = callState.pc.getSenders().find((item) => item.track?.kind === "video");
-    if (sender) await sender.replaceTrack(nextTrack);
-    else callState.pc.addTrack(nextTrack, callState.localStream);
-    callState.localStream.getVideoTracks().forEach((track) => {
-      callState.localStream.removeTrack(track);
-      track.stop();
+    const nextTrack = await createVideoTrackForFacingMode(nextFacingMode);
+    await replaceActiveCallVideoTrack(nextTrack, nextFacingMode, { enableTrack: true });
+    console.log("[call-camera] replaceTrack success", {
+      nextFacingMode,
+      trackId: nextTrack.id,
+      label: nextTrack.label || "",
     });
-    callState.localStream.addTrack(nextTrack);
-    if (elements.localVideo) elements.localVideo.srcObject = callState.localStream;
-    elements.localVideo?.play?.().catch(() => {});
-    callState.cameraOff = false;
-    callState.facingMode = nextFacingMode;
-    updateCallUi();
-    toast(nextFacingMode === "environment" ? "Back camera on." : "Front camera on.");
+    toast("Camera switched");
   } catch (error) {
-    nextStream?.getTracks?.().forEach((track) => track.stop());
-    toast(getMediaErrorMessage(error));
+    console.warn("[call-camera] camera switch failed", error);
+    setCurrentCameraFacingMode(currentFacingMode);
+    toast("Unable to switch camera");
+  } finally {
+    callState.switchingCamera = false;
+    updateCallUi();
   }
 }
 
-async function getCameraSwitchStream(facingMode) {
-  const baseVideo = {
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
-  };
-  const attempts = [];
+function normalizeFacingMode(value = "user") {
+  return String(value || "").toLowerCase() === "environment" ? "environment" : "user";
+}
+
+function setCurrentCameraFacingMode(facingMode = "user") {
+  currentCameraFacingMode = normalizeFacingMode(facingMode);
+  callState.facingMode = currentCameraFacingMode;
+}
+
+async function getCameraSwitchStream(facingMode, currentTrack = null) {
+  const selectedFacingMode = normalizeFacingMode(facingMode);
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: selectedFacingMode } },
+      audio: false,
+    });
+    return await preferAlternateDesktopCamera(stream, currentTrack);
+  } catch (error) {
+    console.warn("[call-camera] switch failed fallback used", {
+      nextFacingMode: selectedFacingMode,
+      error,
+    });
+    return navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  }
+}
+
+async function createVideoTrackForFacingMode(facingMode) {
+  const currentTrack = callState.localStream?.getVideoTracks?.()[0] || null;
+  const stream = await getCameraSwitchStream(facingMode, currentTrack);
+  const nextTrack = stream.getVideoTracks()[0];
+  stream.getAudioTracks().forEach((track) => track.stop());
+  if (!nextTrack) {
+    stream.getTracks().forEach((track) => track.stop());
+    throw new Error("Camera is not available.");
+  }
+  if ("contentHint" in nextTrack) nextTrack.contentHint = "motion";
+  return nextTrack;
+}
+
+async function preferAlternateDesktopCamera(stream, currentTrack) {
+  const currentDeviceId = currentTrack?.getSettings?.().deviceId || "";
+  const nextDeviceId = stream.getVideoTracks?.()[0]?.getSettings?.().deviceId || "";
+  if (!currentDeviceId || !nextDeviceId || currentDeviceId !== nextDeviceId) return stream;
 
   try {
     const devices = await navigator.mediaDevices.enumerateDevices?.();
-    const cameras = (devices || []).filter((device) => device.kind === "videoinput");
-    const preferred = cameraDeviceForFacing(cameras, facingMode);
-    if (preferred?.deviceId) {
-      attempts.push({
-        audio: false,
-        video: { ...baseVideo, deviceId: { exact: preferred.deviceId } },
-      });
-    }
-  } catch {
-    // Browser may hide device labels; facingMode attempts below still work.
+    const alternate = (devices || []).find((device) => device.kind === "videoinput" && device.deviceId && device.deviceId !== currentDeviceId);
+    if (!alternate) return stream;
+
+    const alternateStream = await navigator.mediaDevices.getUserMedia({
+      video: { deviceId: { exact: alternate.deviceId } },
+      audio: false,
+    });
+    console.log("[call-camera] desktop alternate camera selected", {
+      previousDeviceId: currentDeviceId,
+      nextDeviceId: alternate.deviceId,
+    });
+    stream.getTracks().forEach((track) => track.stop());
+    return alternateStream;
+  } catch (error) {
+    console.warn("[call-camera] desktop alternate camera fallback failed", error);
+    return stream;
   }
-
-  attempts.push(
-    {
-      audio: false,
-      video: { ...baseVideo, facingMode: { exact: facingMode } },
-    },
-    {
-      audio: false,
-      video: { ...baseVideo, facingMode },
-    },
-    {
-      audio: false,
-      video: { ...baseVideo, facingMode: { ideal: facingMode } },
-    }
-  );
-
-  let lastError = null;
-  for (const constraints of attempts) {
-    try {
-      return await navigator.mediaDevices.getUserMedia(constraints);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw lastError || new Error("Camera could not be switched.");
 }
 
-function cameraDeviceForFacing(cameras = [], facingMode = "user") {
-  const preferredPattern = facingMode === "environment"
-    ? /(back|rear|environment|world|wide|0\.5|main)/i
-    : /(front|user|face|selfie)/i;
-  const avoidPattern = facingMode === "environment"
-    ? /(front|user|face|selfie)/i
-    : /(back|rear|environment|world)/i;
+function callVideoSender() {
+  const senders = callState.pc?.getSenders?.() || [];
+  return senders.find((sender) => sender.track?.kind === "video") || null;
+}
 
-  return cameras.find((camera) => preferredPattern.test(camera.label || "")) ||
-    cameras.find((camera) => !avoidPattern.test(camera.label || "")) ||
-    cameras[0] ||
-    null;
+async function replaceActiveCallVideoTrack(nextTrack, facingMode, options = {}) {
+  const sender = callVideoSender();
+  if (!sender?.replaceTrack) {
+    nextTrack.stop();
+    throw new Error("Video sender is not available.");
+  }
+
+  const oldTracks = callState.localStream?.getVideoTracks?.() || [];
+  nextTrack.enabled = options.enableTrack !== false;
+  try {
+    await sender.replaceTrack(nextTrack);
+  } catch (error) {
+    nextTrack.stop();
+    throw error;
+  }
+
+  oldTracks.forEach((track) => {
+    callState.localStream.removeTrack(track);
+    track.stop();
+  });
+  callState.localStream.addTrack(nextTrack);
+  callState.cameraOff = !nextTrack.enabled;
+  setCurrentCameraFacingMode(facingMode);
+  const actualFacingMode = nextTrack.getSettings?.().facingMode;
+  callState.videoTrackFacingMode = normalizeFacingMode(actualFacingMode || facingMode);
+
+  if (elements.localVideo) {
+    elements.localVideo.srcObject = callState.localStream;
+    elements.localVideo.muted = true;
+    elements.localVideo.playsInline = true;
+    elements.localVideo.play?.().catch(() => {});
+  }
 }
 
 function toggleCallFullscreen() {
@@ -11436,7 +11515,7 @@ function renderMediaGalleryItem(item) {
   }
 
   return `
-    <button class="gallery-item file-like" type="button" data-gallery-action="download" data-media-src="${source}" data-media-name="${escapeAttr(item.name)}">
+    <button class="gallery-item file-like" type="button" data-gallery-action="download" data-media-type="${escapeAttr(item.type || "file")}" data-media-src="${source}" data-media-name="${escapeAttr(item.name)}">
       <strong>${name}</strong>
       <span>${escapeHtml(formatBytes(item.attachment?.size || 0))} - ${time}</span>
     </button>
@@ -11452,7 +11531,10 @@ async function handleMediaGalleryClick(event) {
   if (target.dataset.galleryAction === "open") {
     openLightbox(source, name, target.dataset.mediaType || "image");
   } else {
-    await downloadMedia(source, name, { remember: true });
+    await downloadMedia(source, name, {
+      type: target.dataset.mediaType || "",
+      remember: true,
+    });
     renderMessages();
   }
 }
@@ -11656,23 +11738,72 @@ function stopMediaPan() {
 }
 
 function downloadOpenMedia() {
-  downloadMedia(mediaViewerState.src, mediaViewerState.caption || "anonchat-media", { remember: true }).catch(handleApiError);
+  downloadMedia(mediaViewerState.src, mediaViewerState.caption || "anonchat-media", {
+    type: mediaViewerState.type || "",
+    remember: true,
+  }).catch(handleApiError);
 }
 
 async function shareOpenMedia() {
   await shareMedia(mediaViewerState.src, mediaViewerState.caption || "AnonChat media");
 }
 
-function safeDownloadName(name = "anonchat-media") {
-  const fallback = "anonchat-media";
-  const value = String(name || fallback)
+function extensionFromMime(mime = "", type = "") {
+  const normalized = String(mime || "").toLowerCase().split(";")[0].trim();
+  const map = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/wav": ".wav",
+    "audio/webm": ".webm",
+    "application/pdf": ".pdf",
+  };
+  if (map[normalized]) return map[normalized];
+  if (String(type || "").toLowerCase() === "image") return ".jpg";
+  if (String(type || "").toLowerCase() === "video") return ".mp4";
+  if (String(type || "").toLowerCase() === "audio") return ".mp3";
+  return "";
+}
+
+function extensionFromSource(src = "") {
+  try {
+    const pathname = /^https?:/i.test(src)
+      ? new URL(src).pathname
+      : String(src || "").split("?")[0].split("#")[0];
+    const match = pathname.match(/\.([a-z0-9]{2,8})$/i);
+    return match ? `.${match[1].toLowerCase()}` : "";
+  } catch {
+    return "";
+  }
+}
+
+function safeDownloadName(name = "anonchat-media", type = "", mime = "", src = "") {
+  const normalizedType = String(type || "").toLowerCase();
+  const fallbackBase = normalizedType === "image"
+    ? "anonchat-image"
+    : normalizedType === "video"
+      ? "anonchat-video"
+      : normalizedType === "audio"
+        ? "anonchat-audio"
+        : "anonchat-media";
+  const value = String(name || fallbackBase)
     .split(/[\\/]/)
     .pop()
     .replace(/[\u0000-\u001f<>:"\\|?*]+/g, "-")
     .replace(/\//g, "-")
     .replace(/\s+/g, " ")
     .trim();
-  return value || fallback;
+  const hasExtension = /\.[a-z0-9]{2,8}$/i.test(value);
+  if (value && hasExtension) return value;
+  const extension = extensionFromMime(mime, type) || extensionFromSource(src);
+  const stamp = Date.now();
+  return `${fallbackBase}-${stamp}${extension}`;
 }
 
 function mediaDownloadKey(src = "", name = "Attachment", type = "file") {
@@ -11731,19 +11862,98 @@ function fileBlobFromDataUrl(dataUrl = "") {
 function triggerDownload(url, name = "anonchat-media") {
   const link = document.createElement("a");
   link.href = url;
-  link.download = safeDownloadName(name);
+  link.download = name;
   link.rel = "noopener noreferrer";
-  link.target = "_blank";
   document.body.appendChild(link);
   link.click();
   link.remove();
 }
 
+function isRemoteHttpUrl(src = "") {
+  return /^https?:\/\//i.test(String(src || ""));
+}
+
+function isImageDownloadSource(src = "", type = "") {
+  const normalizedType = String(type || "").toLowerCase();
+  return (
+    normalizedType === "image" ||
+    /^data:image\//i.test(String(src || "")) ||
+    /\.(?:jpe?g|png|gif|webp|avif|svg)(?:[?#].*)?$/i.test(String(src || ""))
+  );
+}
+
+function proxiedImageDownloadUrl(src = "") {
+  return `/api/media/download?url=${encodeURIComponent(src)}`;
+}
+
+async function probeBackendDownload(downloadUrl = "") {
+  const response = await fetch(downloadUrl, {
+    method: "HEAD",
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  const status = {
+    ok: response.ok,
+    status: response.status,
+    contentType: response.headers.get("content-type") || "",
+  };
+  console.log("[media-download] backend response status", status);
+  return status;
+}
+
+function openManualMediaSaveFallback(src = "", type = "") {
+  if (!src) return false;
+  const opened = window.open(src, "_blank", "noopener,noreferrer");
+  const instruction = String(type || "").toLowerCase() === "image"
+    ? "Long press image and tap Download image."
+    : "Use your browser menu to save this media.";
+  toast(instruction);
+  console.warn("[media-download] fallback triggered; opened source for manual save.", {
+    opened: Boolean(opened),
+    type,
+    src,
+  });
+  return Boolean(opened);
+}
+
 async function downloadMedia(src, name = "anonchat-media", options = {}) {
   if (!src) return;
-  const fileName = safeDownloadName(name);
-  const type = options.type || "";
+  const type = String(options.type || "").toLowerCase();
   let objectUrl = "";
+
+  console.log("[media-download] start", { src, name, type });
+
+  if (isRemoteHttpUrl(src) && isImageDownloadSource(src, type)) {
+    const fileName = safeDownloadName(name, "image", "", src);
+    const downloadUrl = proxiedImageDownloadUrl(src);
+    console.log("[media-download] download url", { downloadUrl, src, fileName });
+
+    try {
+      const backendStatus = await probeBackendDownload(downloadUrl);
+      if (!backendStatus.ok) {
+        throw new Error(`Backend download proxy returned ${backendStatus.status}`);
+      }
+      triggerDownload(downloadUrl, fileName);
+      if (options.remember !== false) rememberDownloadedMedia(src, name, "image");
+      console.log("[media-download] success", {
+        fileName,
+        via: "backend-proxy",
+        status: backendStatus.status,
+      });
+      toast("Download started.");
+      return;
+    } catch (error) {
+      console.warn("[media-download] fallback triggered", {
+        error,
+        downloadUrl,
+        src,
+        name,
+        type: "image",
+      });
+      openManualMediaSaveFallback(src, "image");
+      return;
+    }
+  }
 
   try {
     let blob = null;
@@ -11762,18 +11972,29 @@ async function downloadMedia(src, name = "anonchat-media", options = {}) {
       blob = await response.blob();
     }
 
+    if (!blob || !blob.size) throw new Error("Downloaded media is empty.");
+
+    const fileName = safeDownloadName(name, type, blob.type, src);
     objectUrl = URL.createObjectURL(blob);
     triggerDownload(objectUrl, fileName);
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 45000);
     if (options.remember !== false) rememberDownloadedMedia(src, name, type);
+    console.log("[media-download] success", {
+      fileName,
+      bytes: blob.size,
+      mime: blob.type || "",
+      type,
+    });
     toast("Download started.");
     return;
   } catch (error) {
-    console.warn("Direct media download failed, opening source:", error);
-    const fallbackUrl = cloudinaryAttachmentUrl(src) || src;
-    triggerDownload(fallbackUrl, fileName);
-    if (options.remember !== false) rememberDownloadedMedia(src, name, type);
-    toast("Download opened. If it appears in a new tab, use Save from browser menu.");
+    console.warn("[media-download] failed", {
+      error,
+      src,
+      name,
+      type,
+    });
+    openManualMediaSaveFallback(src, type);
   }
 }
 

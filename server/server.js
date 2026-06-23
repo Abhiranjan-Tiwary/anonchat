@@ -5,6 +5,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import http from "node:http";
+import { Readable } from "node:stream";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import nodemailer from "nodemailer";
@@ -43,6 +44,8 @@ const SESSION_DAYS = 7;
 const EDIT_WINDOW_MS = 5 * 60 * 1000;
 const RESET_OTP_MINUTES = clampOtpExpireMinutes(process.env.OTP_EXPIRE_MINUTES);
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const MAX_PROXY_IMAGE_BYTES = 16 * 1024 * 1024;
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 15000;
 const ALLOWED_ATTACHMENT_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -914,6 +917,9 @@ app.get("/test", async (req, res) => {
     ],
   });
 });
+
+app.head("/api/media/download", rateLimiters.upload, handleMediaDownloadProxy);
+app.get("/api/media/download", rateLimiters.upload, handleMediaDownloadProxy);
 
 app.get("/api/state", async (req, res) => {
   let user = null;
@@ -3047,6 +3053,154 @@ function sanitizeUploadFilename(value) {
     .replace(/\s+/g, " ")
     .trim();
   return cleanText(base || "attachment", 120);
+}
+
+function validateMediaDownloadUrl(value) {
+  const rawUrl = String(value || "").trim();
+  if (!rawUrl) throw createHttpError(400, "Media download URL is required.");
+
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw createHttpError(400, "Media download URL is invalid.");
+  }
+
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw createHttpError(400, "Only http and https media URLs can be downloaded.");
+  }
+
+  if (isBlockedMediaDownloadHost(parsed.hostname)) {
+    throw createHttpError(400, "This media URL is not allowed.");
+  }
+
+  return parsed;
+}
+
+function isBlockedMediaDownloadHost(hostname = "") {
+  const host = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, "");
+  if (!host) return true;
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host === "0.0.0.0" || host === "::" || host === "::1") return true;
+
+  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4) {
+    const parts = ipv4.slice(1).map(Number);
+    if (parts.some((part) => part < 0 || part > 255)) return true;
+    const [a, b] = parts;
+    return (
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    );
+  }
+
+  return false;
+}
+
+function imageExtensionFromMime(mimeType = "") {
+  const type = normalizeMimeType(mimeType);
+  const extensions = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/avif": ".avif",
+    "image/svg+xml": ".svg",
+  };
+  return extensions[type] || ".jpg";
+}
+
+async function cancelMediaDownloadBody(upstream) {
+  try {
+    await upstream?.body?.cancel?.();
+  } catch {
+    // The upstream stream may already be locked/closed; cleanup is best effort.
+  }
+}
+
+async function handleMediaDownloadProxy(req, res) {
+  let upstream = null;
+  try {
+    const targetUrl = validateMediaDownloadUrl(req.query.url);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), MEDIA_DOWNLOAD_TIMEOUT_MS);
+
+    try {
+      upstream = await fetch(targetUrl.href, {
+        method: "GET",
+        redirect: "follow",
+        signal: controller.signal,
+        headers: {
+          Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+          "User-Agent": "AnonChat/1.0 media-download",
+        },
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!upstream.ok) {
+      await cancelMediaDownloadBody(upstream);
+      throw createHttpError(upstream.status || 502, `Media download failed with status ${upstream.status || 502}.`);
+    }
+
+    const contentType = normalizeMimeType(upstream.headers.get("content-type") || "");
+    if (!contentType.startsWith("image/")) {
+      await cancelMediaDownloadBody(upstream);
+      throw createHttpError(415, "Only image downloads are supported by this endpoint.");
+    }
+
+    const contentLength = Number(upstream.headers.get("content-length") || 0);
+    if (contentLength > MAX_PROXY_IMAGE_BYTES) {
+      await cancelMediaDownloadBody(upstream);
+      throw createHttpError(413, "Image is too large to download.");
+    }
+
+    const extension = imageExtensionFromMime(contentType);
+    const filename = `anonchat-image-${Date.now()}${extension}`;
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Cache-Control", "no-store");
+    if (contentLength > 0) res.setHeader("Content-Length", String(contentLength));
+
+    if (req.method === "HEAD") {
+      await cancelMediaDownloadBody(upstream);
+      res.status(200).end();
+      return;
+    }
+
+    if (!upstream.body) {
+      throw createHttpError(502, "Media download stream is not available.");
+    }
+
+    let streamedBytes = 0;
+    const stream = Readable.fromWeb(upstream.body);
+    stream.on("data", (chunk) => {
+      streamedBytes += Buffer.byteLength(chunk);
+      if (streamedBytes > MAX_PROXY_IMAGE_BYTES) {
+        stream.destroy(createHttpError(413, "Image is too large to download."));
+      }
+    });
+    stream.on("error", (error) => {
+      if (!res.headersSent) {
+        handleError(res, error);
+        return;
+      }
+      res.destroy(error);
+    });
+    stream.pipe(res);
+  } catch (error) {
+    await cancelMediaDownloadBody(upstream);
+    if (res.headersSent) {
+      res.destroy(error);
+      return;
+    }
+    handleError(res, error.name === "AbortError" ? createHttpError(504, "Media download timed out.") : error);
+  }
 }
 
 function validateUploadPayload({ mimeType, size, kind, maxBytes = MAX_ATTACHMENT_BYTES, dataUrl = "", buffer = null }) {
