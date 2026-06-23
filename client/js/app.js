@@ -1,6 +1,7 @@
 const SESSION_KEY = "anonchat-session-v4";
 const ROOM_KEY = "anonchat-active-room-v4";
 const API_BASE = "";
+const BUILD_ID = "dp-download-native-fix-20260623";
 const LANDING_ROUTE = "/";
 const LOGIN_ROUTE = "/login";
 const SIGNUP_ROUTE = "/signup";
@@ -389,6 +390,7 @@ let adminSidebarTouchStartY = null;
 const elements = {};
 
 document.addEventListener("DOMContentLoaded", async () => {
+  console.log("[anonchat] build", BUILD_ID);
   cacheElements();
   applyThemeChoice(loadInitialThemeChoice(), { persist: false, transition: false });
   updateConnectionStatusUi();
@@ -8167,20 +8169,20 @@ function profileFormMarkup(user) {
     <form class="profile-form profile-page-form" id="profileForm">
       ${profilePhotoNativeInputMarkup()}
       <div class="profile-large">
-        <button class="profile-photo-button" id="profilePhotoButton" type="button" data-profile-photo-trigger aria-label="Change profile photo">
+        <label class="profile-photo-button" id="profilePhotoButton" for="globalProfilePhotoInput" data-profile-photo-trigger role="button" tabindex="0" aria-label="Change profile photo">
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
-        </button>
+        </label>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <button class="profile-photo-action change" id="changeProfilePhotoButton" type="button" data-profile-photo-trigger>
+          <label class="profile-photo-action change" id="changeProfilePhotoButton" for="globalProfilePhotoInput" data-profile-photo-trigger role="button" tabindex="0">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
             </svg>
             <span>${hasPhoto ? "Change photo" : "Add photo"}</span>
-          </button>
+          </label>
           <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${hasPhoto ? "" : "disabled"}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
@@ -8601,10 +8603,19 @@ function updateInstallButtonState() {
 function initPwaExperience() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/service-worker.js")
-      .then(() => syncWebPushSubscription())
+      .then((registration) => {
+        registration.update?.().catch(debugSocketWarning);
+        return syncWebPushSubscription();
+      })
       .catch((error) => {
         debugSocketWarning("Service worker registration failed:", error.message);
       });
+    let reloadedForServiceWorker = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (reloadedForServiceWorker) return;
+      reloadedForServiceWorker = true;
+      window.location.reload();
+    });
     navigator.serviceWorker.addEventListener("message", (event) => {
       if (event.data?.type === "anonchat:push-subscription-change") {
         syncWebPushSubscription().catch(debugSocketWarning);
@@ -11929,18 +11940,35 @@ async function downloadMedia(src, name = "anonchat-media", options = {}) {
     console.log("[media-download] download url", { downloadUrl, src, fileName });
 
     try {
-      const backendStatus = await probeBackendDownload(downloadUrl);
-      if (!backendStatus.ok) {
-        throw new Error(`Backend download proxy returned ${backendStatus.status}`);
-      }
       triggerDownload(downloadUrl, fileName);
       if (options.remember !== false) rememberDownloadedMedia(src, name, "image");
       console.log("[media-download] success", {
         fileName,
         via: "backend-proxy",
-        status: backendStatus.status,
+        downloadUrl,
       });
       toast("Download started.");
+      probeBackendDownload(downloadUrl).then((backendStatus) => {
+        if (!backendStatus.ok) {
+          console.warn("[media-download] fallback triggered", {
+            error: new Error(`Backend download proxy returned ${backendStatus.status}`),
+            downloadUrl,
+            src,
+            name,
+            type: "image",
+          });
+          openManualMediaSaveFallback(src, "image");
+        }
+      }).catch((error) => {
+        console.warn("[media-download] fallback triggered", {
+          error,
+          downloadUrl,
+          src,
+          name,
+          type: "image",
+        });
+        openManualMediaSaveFallback(src, "image");
+      });
       return;
     } catch (error) {
       console.warn("[media-download] fallback triggered", {
@@ -13833,20 +13861,20 @@ function renderProfilePanel() {
     <form class="profile-form" id="profileForm">
       ${profilePhotoNativeInputMarkup()}
       <div class="profile-large">
-        <button class="profile-photo-button" id="profilePhotoButton" type="button" data-profile-photo-trigger aria-label="Change profile photo">
+        <label class="profile-photo-button" id="profilePhotoButton" for="globalProfilePhotoInput" data-profile-photo-trigger role="button" tabindex="0" aria-label="Change profile photo">
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
-        </button>
+        </label>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <button class="profile-photo-action change" id="changeProfilePhotoButton" type="button" data-profile-photo-trigger>
+          <label class="profile-photo-action change" id="changeProfilePhotoButton" for="globalProfilePhotoInput" data-profile-photo-trigger role="button" tabindex="0">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
             </svg>
             <span>${user.avatarDataUrl ? "Change photo" : "Add photo"}</span>
-          </button>
+          </label>
           <button class="profile-photo-action remove" type="button" id="removeProfilePhotoButton" ${user.avatarDataUrl ? "" : "disabled"}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
@@ -14170,9 +14198,9 @@ function profilePhotoTriggerMatch(target) {
 function openGlobalProfilePhotoPicker(form) {
   activeProfilePhotoForm = form || activeProfileRoot();
   const input =
-    activeProfilePhotoForm?.querySelector("[data-profile-photo-input]") ||
     elements.globalProfilePhotoInput ||
-    document.querySelector("#globalProfilePhotoInput");
+    document.querySelector("#globalProfilePhotoInput") ||
+    activeProfilePhotoForm?.querySelector("[data-profile-photo-input]");
   if (!input) {
     console.log("[profile-photo] no existing file input found, creating fallback input");
     openProfilePhotoPicker(activeProfilePhotoForm);
@@ -14192,13 +14220,22 @@ function handleProfilePhotoTriggerCapture(event) {
   const match = profilePhotoTriggerMatch(event.target);
   if (!match) return;
 
-  event.preventDefault();
   event.stopPropagation();
+  activeProfilePhotoForm = match.form;
+  profileDraftDirty = true;
   console.log("[profile-photo] change photo trigger clicked", {
     triggerId: match.trigger.id || "",
+    nativeLabel: Boolean(match.trigger.matches?.("label[for='globalProfilePhotoInput']")),
     hasFileInput: Boolean(match.form?.querySelector("[data-profile-photo-input]")),
   });
-  profileDraftDirty = true;
+
+  if (match.trigger.matches?.("label[for='globalProfilePhotoInput']")) {
+    const input = elements.globalProfilePhotoInput || document.querySelector("#globalProfilePhotoInput");
+    if (input) input.value = "";
+    return;
+  }
+
+  event.preventDefault();
   openGlobalProfilePhotoPicker(match.form);
 }
 

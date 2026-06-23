@@ -1,13 +1,13 @@
-const CACHE_NAME = "anonchat-shell-v29-chat-fixes";
+const CACHE_NAME = "anonchat-shell-v30-dp-download-native-fix";
 const SHELL_ASSETS = [
   "/",
   "/offline.html",
   "/manifest.webmanifest",
-  "/css/styles.css?v=chat-fixes-20260621",
-  "/css/landing-nav-fix.css?v=home-cleanup-20260605",
+  "/css/styles.css?v=dp-upload-audit-20260622b",
+  "/css/landing-nav-fix.css?v=layout-qa-20260622b",
   "/css/auth-page-fix.css?v=home-cleanup-20260605",
-  "/css/user-chat-room-fix.css?v=home-cleanup-20260605",
-  "/js/app.js?v=chat-fixes-20260621",
+  "/css/user-chat-room-fix.css?v=layout-qa-20260622b",
+  "/js/app.js?v=dp-download-native-fix-20260623",
   "/assets/logo/logo.png",
   "/assets/anonchat-preview.png"
 ];
@@ -41,9 +41,28 @@ self.addEventListener("fetch", (event) => {
   const sameOrigin = url.origin === self.location.origin;
   const isApiRequest = url.pathname.startsWith("/api/") || url.pathname.startsWith("/socket.io/");
   const isMediaRequest = ["audio", "video"].includes(request.destination);
+  const isVersionedCodeRequest =
+    url.pathname.startsWith("/js/") ||
+    url.pathname.startsWith("/css/") ||
+    url.pathname === "/service-worker.js";
   const isCacheableRequest = request.method === "GET" && sameOrigin && !isApiRequest && !isMediaRequest;
 
   if (!isCacheableRequest) {
+    return;
+  }
+
+  if (isVersionedCodeRequest) {
+    event.respondWith(
+      fetch(request, { cache: "no-store" })
+        .then((response) => {
+          if (response.ok && response.type !== "opaque") {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)).catch(() => {});
+          }
+          return response;
+        })
+        .catch(() => caches.match(request))
+    );
     return;
   }
 
