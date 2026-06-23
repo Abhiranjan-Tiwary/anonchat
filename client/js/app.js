@@ -1,7 +1,7 @@
 const SESSION_KEY = "anonchat-session-v4";
 const ROOM_KEY = "anonchat-active-room-v4";
 const API_BASE = "";
-const BUILD_ID = "dp-download-native-fix-20260623";
+const BUILD_ID = "dp-tap-input-fix-20260623";
 const LANDING_ROUTE = "/";
 const LOGIN_ROUTE = "/login";
 const SIGNUP_ROUTE = "/signup";
@@ -8167,16 +8167,17 @@ function profileFormMarkup(user) {
   const hasPhoto = Boolean(user.avatarDataUrl || pendingAvatarDataUrl);
   return `
     <form class="profile-form profile-page-form" id="profileForm">
-      ${profilePhotoNativeInputMarkup()}
       <div class="profile-large">
-        <label class="profile-photo-button" id="profilePhotoButton" for="globalProfilePhotoInput" data-profile-photo-trigger role="button" tabindex="0" aria-label="Change profile photo">
+        <label class="profile-photo-button" id="profilePhotoButton" data-profile-photo-trigger role="button" tabindex="0" aria-label="Change profile photo">
+          ${profilePhotoTapInputMarkup("Choose profile photo")}
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
         </label>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <label class="profile-photo-action change" id="changeProfilePhotoButton" for="globalProfilePhotoInput" data-profile-photo-trigger role="button" tabindex="0">
+          <label class="profile-photo-action change" id="changeProfilePhotoButton" data-profile-photo-trigger role="button" tabindex="0">
+            ${profilePhotoTapInputMarkup(hasPhoto ? "Change profile photo" : "Add profile photo")}
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
@@ -11329,10 +11330,22 @@ function profilePhotoNativeInputMarkup() {
     <input
       class="profile-photo-native-input"
       type="file"
-      accept="image/jpeg,image/png,image/webp,image/gif"
+      accept="image/*"
       data-profile-photo-input
       tabindex="-1"
       aria-label="Choose profile photo"
+    />
+  `;
+}
+
+function profilePhotoTapInputMarkup(label = "Choose profile photo") {
+  return `
+    <input
+      class="profile-photo-tap-input"
+      type="file"
+      accept="image/*"
+      data-profile-photo-input
+      aria-label="${escapeAttr(label)}"
     />
   `;
 }
@@ -13859,16 +13872,17 @@ function renderProfilePanel() {
   profileDraftDirty = false;
   elements.profilePanel.innerHTML = `
     <form class="profile-form" id="profileForm">
-      ${profilePhotoNativeInputMarkup()}
       <div class="profile-large">
-        <label class="profile-photo-button" id="profilePhotoButton" for="globalProfilePhotoInput" data-profile-photo-trigger role="button" tabindex="0" aria-label="Change profile photo">
+        <label class="profile-photo-button" id="profilePhotoButton" data-profile-photo-trigger role="button" tabindex="0" aria-label="Change profile photo">
+          ${profilePhotoTapInputMarkup("Choose profile photo")}
           <span class="profile-photo-frame">
             ${renderAvatar(user.name, user.avatarColor, user.avatarDataUrl, "profile-photo-preview")}
           </span>
           <span class="change-photo-text">${user.avatarDataUrl ? "Change photo" : "Add your photo"}</span>
         </label>
         <div class="profile-photo-actions" aria-label="Profile photo actions">
-          <label class="profile-photo-action change" id="changeProfilePhotoButton" for="globalProfilePhotoInput" data-profile-photo-trigger role="button" tabindex="0">
+          <label class="profile-photo-action change" id="changeProfilePhotoButton" data-profile-photo-trigger role="button" tabindex="0">
+            ${profilePhotoTapInputMarkup(user.avatarDataUrl ? "Change profile photo" : "Add profile photo")}
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 8h3l2-2h6l2 2h3v10H4V8Z" />
               <circle cx="12" cy="13" r="3" />
@@ -14217,6 +14231,17 @@ function openGlobalProfilePhotoPicker(form) {
 }
 
 function handleProfilePhotoTriggerCapture(event) {
+  if (event.target?.matches?.("[data-profile-photo-input], #globalProfilePhotoInput")) {
+    activeProfilePhotoForm = event.target.closest("#profileForm") || activeProfilePhotoForm || activeProfileRoot();
+    profileDraftDirty = true;
+    console.log("[profile-photo] native file input tapped", {
+      inputId: event.target.id || "",
+      inline: Boolean(event.target.matches("[data-profile-photo-input]")),
+    });
+    event.target.value = "";
+    return;
+  }
+
   const match = profilePhotoTriggerMatch(event.target);
   if (!match) return;
 
@@ -14228,6 +14253,18 @@ function handleProfilePhotoTriggerCapture(event) {
     nativeLabel: Boolean(match.trigger.matches?.("label[for='globalProfilePhotoInput']")),
     hasFileInput: Boolean(match.form?.querySelector("[data-profile-photo-input]")),
   });
+
+  const inlineInput = match.trigger.querySelector?.("[data-profile-photo-input]");
+  if (inlineInput) {
+    event.preventDefault();
+    console.log("[profile-photo] opening inline file picker", {
+      triggerId: match.trigger.id || "",
+      inputClass: inlineInput.className || "",
+    });
+    inlineInput.value = "";
+    inlineInput.click();
+    return;
+  }
 
   if (match.trigger.matches?.("label[for='globalProfilePhotoInput']")) {
     const input = elements.globalProfilePhotoInput || document.querySelector("#globalProfilePhotoInput");

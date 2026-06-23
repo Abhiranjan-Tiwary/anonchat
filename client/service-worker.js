@@ -1,13 +1,13 @@
-const CACHE_NAME = "anonchat-shell-v30-dp-download-native-fix";
+const CACHE_NAME = "anonchat-shell-v31-dp-tap-input-fix";
 const SHELL_ASSETS = [
   "/",
   "/offline.html",
   "/manifest.webmanifest",
-  "/css/styles.css?v=dp-upload-audit-20260622b",
+  "/css/styles.css?v=dp-tap-input-fix-20260623",
   "/css/landing-nav-fix.css?v=layout-qa-20260622b",
   "/css/auth-page-fix.css?v=home-cleanup-20260605",
   "/css/user-chat-room-fix.css?v=layout-qa-20260622b",
-  "/js/app.js?v=dp-download-native-fix-20260623",
+  "/js/app.js?v=dp-tap-input-fix-20260623",
   "/assets/logo/logo.png",
   "/assets/anonchat-preview.png"
 ];

@@ -13411,6 +13411,36 @@ html[data-theme="light"] .call-screen {
   z-index: -1;
 }
 
+.profile-photo-button,
+.profile-photo-action.change {
+  position: relative;
+  overflow: hidden;
+}
+
+.profile-photo-tap-input {
+  position: absolute !important;
+  inset: 0 !important;
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 100% !important;
+  min-height: 100% !important;
+  opacity: 0.01 !important;
+  pointer-events: auto !important;
+  cursor: pointer !important;
+  z-index: 999 !important;
+  border: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+}
+
+.profile-photo-button > *:not(.profile-photo-tap-input),
+.profile-photo-action.change > *:not(.profile-photo-tap-input) {
+  pointer-events: none;
+}
+
 .profile-photo-frame .profile-photo-preview {
   display: grid;
   place-items: center;
